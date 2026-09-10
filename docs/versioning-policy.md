@@ -16,10 +16,11 @@ minor/pre-release versions, and the affected docs in the same change.
 Current alpha wire notes:
 
 - `0.1.0-alpha.11` cleanly replaces the active covenant with
-  `kaspa-x402-escrow-v4`, compiled by SilverScript commit
-  `158534d606e9d5541e932c7575ff331e12699fb5`. It uses explicit DAA lock
-  semantics and four-byte KCC-01 dispatch tags; Alpha.10 channel state and
-  signature scripts are not accepted or migrated.
+  `kaspa-x402-escrow-v4`, compiled by SilverScript v1.0.0 commit
+  `3ed973335b59269293564805cc2c58a14595ec03` (whose portable artifact reports
+  compiler version `0.1.0`). It uses explicit DAA lock semantics and four-byte
+  KCC-01 dispatch tags; Alpha.10 channel state and signature scripts are not
+  accepted or migrated.
 - `0.1.0-alpha.10` introduced the `kaspa-escrow-v2` binding and
   `kaspa-x402-escrow-v2` KIP-20 covenant. Buyer vouchers authorize a
   lifetime cumulative ceiling, partial claims advance the settled lifetime
