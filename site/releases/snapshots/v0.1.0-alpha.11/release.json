@@ -23,8 +23,8 @@
     {
       "source": "schemas/payment-required.schema.json",
       "target": "v0.1.0-alpha.11/schemas/payment-required.schema.json",
-      "bytes": 4993,
-      "sha256": "b118faedc66a809d22437960920d0260fe718ed31b564706ec8e80b65be8f073"
+      "bytes": 5608,
+      "sha256": "aafbb900e9278da28cbdaf562c11e941c5692bbbd3736aed5638ab778358f29f"
     },
     {
       "source": "schemas/payment-payload.schema.json",
@@ -41,20 +41,20 @@
     {
       "source": "schemas/kaspa-requirements-extra.schema.json",
       "target": "v0.1.0-alpha.11/schemas/kaspa-requirements-extra.schema.json",
-      "bytes": 9696,
-      "sha256": "01d99edf23d80fadfb030e6708248e2c0a0d90391b41846d79524aba31320b2f"
+      "bytes": 9309,
+      "sha256": "417d0b9e0131c9ca659ba76052378f925d995b4992bdc5c3df77f2ea853f0ed1"
     },
     {
       "source": "schemas/kaspa-payment-payload.schema.json",
       "target": "v0.1.0-alpha.11/schemas/kaspa-payment-payload.schema.json",
-      "bytes": 8087,
-      "sha256": "8666e060a90bd8a6ea18f49916e0a51c0d1cd218a46e188f997474cbc9594d5d"
+      "bytes": 9603,
+      "sha256": "2eeaf6b0aabcf342f4e130f5c0e60410c8918b125afb35b6450c29d72cf9a8ac"
     },
     {
       "source": "schemas/kaspa-batch-extra.schema.json",
       "target": "v0.1.0-alpha.11/schemas/kaspa-batch-extra.schema.json",
-      "bytes": 4146,
-      "sha256": "2e891e25e9172aff0232562aa4fdea79dc8d594e843785c9b0f78aad753e7064"
+      "bytes": 3771,
+      "sha256": "170f6dc76a1db1cc55f54995649ff735f2750b9fa276f72cae971db260ffdb21"
     },
     {
       "source": "schemas/payment-identifier.schema.json",
@@ -65,44 +65,44 @@
     {
       "source": "schemas/channel-state.schema.json",
       "target": "v0.1.0-alpha.11/schemas/channel-state.schema.json",
-      "bytes": 2222,
-      "sha256": "d70d981844da1af4f377177c704fbe587efa39961d4eb02c89803ea96e670e01"
+      "bytes": 2177,
+      "sha256": "7cd7c2899dde67b1cc676d80bd3480937fc86ba6415ac94694a5f0b34376d433"
     },
     {
       "source": "spec/kaspa-x402-v1.md",
       "target": "v0.1.0-alpha.11/spec/kaspa-x402-v1.md",
-      "bytes": 11985,
-      "sha256": "1adaecc4d3714fd106dc14024a019a97611d94583c9035b01be938c9a7d87753"
+      "bytes": 12156,
+      "sha256": "b9aeff90eaf8b9fbe2c9e47ba72b62a1c3711749f5bf5eefa1c14133087e9f7e"
     },
     {
       "source": "spec/kaspa-exact-v2.md",
       "target": "v0.1.0-alpha.11/spec/kaspa-exact-v2.md",
-      "bytes": 32589,
-      "sha256": "f1e76ff6528e09e6ae6b644d54f3347b326a1043b948c899ea087384532cf829"
+      "bytes": 34328,
+      "sha256": "02f41a005b87f9c92717abcf06dfa5ed20844b14b3b525ddb0cc92bfd7f4c49a"
     },
     {
-      "source": "spec/kaspa-batch-settlement-v2.md",
-      "target": "v0.1.0-alpha.11/spec/kaspa-batch-settlement-v2.md",
-      "bytes": 28733,
-      "sha256": "d0bd784e98b373a41596cdc6d0ea288c96f90a253fccee126d1b9a5051d49f59"
+      "source": "spec/kaspa-batch-settlement-v3.md",
+      "target": "v0.1.0-alpha.11/spec/kaspa-batch-settlement-v3.md",
+      "bytes": 27857,
+      "sha256": "8b9b88a17bc00ef6deb012ab705fd911340b77c17d76466a1beee09d61c979c0"
     },
     {
       "source": "spec/http-profile.md",
       "target": "v0.1.0-alpha.11/spec/http-profile.md",
-      "bytes": 2734,
-      "sha256": "00b827c25344b30e3cb6d416ed389ff38d78a131b7cb8c5bb3ecb3df1b26a972"
+      "bytes": 2820,
+      "sha256": "4511607cd4930ca0c67224939c559bd000f5cad2b9c0501b89c62331bfca033d"
     },
     {
       "source": "spec/mcp-profile.md",
       "target": "v0.1.0-alpha.11/spec/mcp-profile.md",
-      "bytes": 3953,
-      "sha256": "1da398bff59b36d49a05f578830f310973c635dafa60a133c3b8feea1cde6502"
+      "bytes": 5545,
+      "sha256": "5c37eb16c441ae42f2dfb5932548646c7e5075a62d49a278b9ad9b676082ad27"
     },
     {
       "source": "spec/facilitator-profile.md",
       "target": "v0.1.0-alpha.11/spec/facilitator-profile.md",
-      "bytes": 5284,
-      "sha256": "607fc503d47f49385a1379e9811f425051e2279d1c11a0f610e5f30b25d81765"
+      "bytes": 5330,
+      "sha256": "2f0b31ad382b3030da799eaaa49549cebc0f08d518415246cc6be8836fcb9b9e"
     },
     {
       "source": "spec/errors.md",
@@ -111,16 +111,16 @@
       "sha256": "89527fc4e426b38de3fad3d82192505a3e2e547d91ac1f249652d62361fb3f18"
     },
     {
-      "source": "contracts/kaspa-x402-escrow-v3.sil",
-      "target": "v0.1.0-alpha.11/contracts/kaspa-x402-escrow-v3.sil",
-      "bytes": 6445,
-      "sha256": "b7396e43539c972941d1045ba1deecb2dabb71ee621e7dcb41102033fb25033a"
+      "source": "contracts/kaspa-x402-escrow-v4.sil",
+      "target": "v0.1.0-alpha.11/contracts/kaspa-x402-escrow-v4.sil",
+      "bytes": 6793,
+      "sha256": "065dff5d0d02f3a09f56bab977a33d4e047f2ccec64c0d066a318d342797fcb0"
     },
     {
-      "source": "contracts/fixtures/kaspa-x402-escrow-v3.json",
-      "target": "v0.1.0-alpha.11/contracts/fixtures/kaspa-x402-escrow-v3.json",
-      "bytes": 9624,
-      "sha256": "b23830f939f8c0f90f1af71fe38656f9567219fc1ec1a85da5782dcae106886b"
+      "source": "contracts/fixtures/kaspa-x402-escrow-v4.json",
+      "target": "v0.1.0-alpha.11/contracts/fixtures/kaspa-x402-escrow-v4.json",
+      "bytes": 11867,
+      "sha256": "0320e9e39e295cd995b590f313e6dfc0b64da8699255ff7b5776f511b49c03e0"
     },
     {
       "source": "docs/public-proposal.md",
@@ -137,74 +137,74 @@
     {
       "source": "docs/live-testnet-report.md",
       "target": "v0.1.0-alpha.11/docs/live-testnet-report.md",
-      "bytes": 8845,
-      "sha256": "040cf92c46a0cb80106c1a81aebe217391a861fc94cb3509001a285ee5ee4693"
+      "bytes": 9284,
+      "sha256": "b6b3084348219cd356da00ba508c1015b7d8f99cd3f46cc08822d57ec2b5a8b6"
     },
     {
       "source": "docs/live-testnet-proof.md",
       "target": "v0.1.0-alpha.11/docs/live-testnet-proof.md",
-      "bytes": 4794,
-      "sha256": "68671d2e9334a83b7557a6b2abbaf027da4545199d039f7af26baef5cc4b90bc"
+      "bytes": 4844,
+      "sha256": "aff5710933346debf66be177b700aefd439f4144084ae3ab870f7f787e7b4c70"
     },
     {
       "source": "docs/review-closure-ledger.md",
       "target": "v0.1.0-alpha.11/docs/review-closure-ledger.md",
-      "bytes": 7145,
-      "sha256": "23ea2897a81af9a713f902d5248679ffc686bb03d3bdf52072c2daff25c919e5"
+      "bytes": 7211,
+      "sha256": "99b2a148e6fad9daf014bfb587541c79795b9803839539b8318b3f550cebbb3d"
     },
     {
       "source": "docs/security-threat-model.md",
       "target": "v0.1.0-alpha.11/docs/security-threat-model.md",
-      "bytes": 10378,
-      "sha256": "00027be1d826775c1d22d0df6d554cdeb45eb10eb100cfdd1128cea784394059"
+      "bytes": 11042,
+      "sha256": "6117b264a49c0b952b4b99f9fc49b27733e7cee8d057df275f9f8ac4ac324289"
     },
     {
       "source": "docs/mainnet-readiness.md",
       "target": "v0.1.0-alpha.11/docs/mainnet-readiness.md",
-      "bytes": 4871,
-      "sha256": "729f32072294ddbd7b398f8eafba76215f92c43d5cdf97fe66b2093a6ed87657"
+      "bytes": 5446,
+      "sha256": "0f531e9ba43124f55176136fd132161c778817be71cd3f36b49dfbca339b0f5b"
     },
     {
       "source": "docs/versioning-policy.md",
       "target": "v0.1.0-alpha.11/docs/versioning-policy.md",
-      "bytes": 4204,
-      "sha256": "465c846fe5db443bb3b3fc01c855a585ae1f27cee25703cb105427f16146ebae"
+      "bytes": 4272,
+      "sha256": "16a85e1c7204210e53ab20ca151f4daab094ebcab40f21696ef9fba0acde7e36"
     },
     {
       "source": "docs/native-profile-boundary.md",
       "target": "v0.1.0-alpha.11/docs/native-profile-boundary.md",
-      "bytes": 6175,
-      "sha256": "990a316f87bea2fe58567b5d0a876d06e6702ae00a556dbefa1aef42842cdde2"
+      "bytes": 6170,
+      "sha256": "d46056d4b1713e2920de6f0b5ba4788e3f8ae520588757ad2f8c53215c198ae2"
     },
     {
       "source": "docs/server-store-contract.md",
       "target": "v0.1.0-alpha.11/docs/server-store-contract.md",
-      "bytes": 6663,
-      "sha256": "46d8ca1421406502ff14e72c664a71493fdaacbbe38008df27de6d969f90aa28"
+      "bytes": 11320,
+      "sha256": "a2a63e228f047224adc4996d9a3dea74bc92afcaad8dce352a2fe603cee5e37b"
     },
     {
       "source": "docs/server-runtime-lock-contract.md",
       "target": "v0.1.0-alpha.11/docs/server-runtime-lock-contract.md",
-      "bytes": 2087,
-      "sha256": "d45b42122ec8353e5cf758b3cde5dc98f3b1e75b72ad8c4464a36ffa8a12f1af"
+      "bytes": 2734,
+      "sha256": "09a76a17b317b54631d5e5193ea791e125948538abb0141944ce51b77f0ad709"
     },
     {
       "source": "vectors/README.md",
       "target": "v0.1.0-alpha.11/vectors/README.md",
-      "bytes": 4619,
-      "sha256": "11fc3131c2f23b44eb612729f22d0c98753e398288888ac04109f8d3157fadbd"
+      "bytes": 4645,
+      "sha256": "bb2c4fd13f6fdf70b97edbc39dfaec3661fb53a3c4f9dd6fd88bf528827c0eca"
     },
     {
-      "source": "vectors/batch/interop-v2.json",
-      "target": "v0.1.0-alpha.11/vectors/batch/interop-v2.json",
-      "bytes": 11149,
-      "sha256": "1f97e17aaa665c5e4cfb0efb8cffc7e977166cfafc60521607f945a86910cab8"
+      "source": "vectors/batch/interop-v3.json",
+      "target": "v0.1.0-alpha.11/vectors/batch/interop-v3.json",
+      "bytes": 13939,
+      "sha256": "315fddc504d2db417ca0572dc502905cbae9e1d74a09511442fb30a1636c1fd2"
     },
     {
       "source": "vectors/channel-id/base.json",
       "target": "v0.1.0-alpha.11/vectors/channel-id/base.json",
       "bytes": 1618,
-      "sha256": "8b6b10b3104f9243cd29802939cde81678b5c7baf4ccd774571156b2cb60f5b0"
+      "sha256": "91f96ddc518b0545db216703fd10c0019eb740c167f8b5d7f7bb98cad877ca5b"
     },
     {
       "source": "vectors/exact/consensus-profiles.json",
@@ -233,8 +233,14 @@
     {
       "source": "vectors/negative/batch-mainnet.json",
       "target": "v0.1.0-alpha.11/vectors/negative/batch-mainnet.json",
-      "bytes": 1048,
-      "sha256": "0d28c188d5fcd4ff8c1882062c36d8acca9e5b8772765ff0486e359e58d3c9e4"
+      "bytes": 1149,
+      "sha256": "58ddac686149a1e769908d2e4ddd42c8ed4b10f5849f0fd9e157cbe9ea0c9fe5"
+    },
+    {
+      "source": "vectors/negative/batch-zero-charge.json",
+      "target": "v0.1.0-alpha.11/vectors/negative/batch-zero-charge.json",
+      "bytes": 1135,
+      "sha256": "c73ae1706fbcc37114e93a8b47376a9a350e20733bc2f9f161bbcc26c70dd798"
     },
     {
       "source": "vectors/negative/deposit-success-missing-commitment.json",
@@ -303,6 +309,12 @@
       "sha256": "3efeb97f2929221e8ef9c9a3b7e8c2b5ffc044e651c565d331def50d1efd57d5"
     },
     {
+      "source": "vectors/negative/legacy-batch-binding.json",
+      "target": "v0.1.0-alpha.11/vectors/negative/legacy-batch-binding.json",
+      "bytes": 1127,
+      "sha256": "07cb23fc4db3a4319e7d5dda2c0feeec069ffd07c76d8054177f5deff229606d"
+    },
+    {
       "source": "vectors/negative/missing-payment-identifier.json",
       "target": "v0.1.0-alpha.11/vectors/negative/missing-payment-identifier.json",
       "bytes": 2967,
@@ -353,8 +365,8 @@
     {
       "source": "vectors/negative/wrong-binding.json",
       "target": "v0.1.0-alpha.11/vectors/negative/wrong-binding.json",
-      "bytes": 980,
-      "sha256": "7bec2527d606ee0438bd10221c4fce4f30968b5db888010dd5ffaf3f3e732bdd"
+      "bytes": 1081,
+      "sha256": "e34616d6af1d49c27517ad26bbdeff3d3033f732e0434df18fe62913dea78ad7"
     },
     {
       "source": "vectors/negative/wrong-scheme.json",
@@ -377,20 +389,20 @@
     {
       "source": "vectors/settlement-response/claim-success.json",
       "target": "v0.1.0-alpha.11/vectors/settlement-response/claim-success.json",
-      "bytes": 1489,
-      "sha256": "b2bd1ac1b41274c79664fae8900d37396e172d906a2b91c2685f1b10a5c59aeb"
+      "bytes": 1477,
+      "sha256": "3d526a77379af9771fb6e47ede762d109485b427b492a2ddf95a16e3392be4d7"
     },
     {
       "source": "vectors/settlement-response/corrective-402.json",
       "target": "v0.1.0-alpha.11/vectors/settlement-response/corrective-402.json",
-      "bytes": 2193,
-      "sha256": "70d78c17f0efb9ff9a9852014b10b67b20ddda0de7b4e3944cb790faf66983e1"
+      "bytes": 1958,
+      "sha256": "65e784538d5ec4e7b04aab515a0733efc3e7e8baaf661b51cd9558b988c6272d"
     },
     {
       "source": "vectors/settlement-response/deposit-voucher-success.json",
       "target": "v0.1.0-alpha.11/vectors/settlement-response/deposit-voucher-success.json",
-      "bytes": 1404,
-      "sha256": "e70b2cdd6d8512450584d357f2682b2c61e52cb86830653b367185c328dcd5f3"
+      "bytes": 1392,
+      "sha256": "bca629a65a7899e3e5fe9f2a79a29dce54827c02da7447af18736ea579c9abaf"
     },
     {
       "source": "vectors/settlement-response/failure.json",
@@ -407,56 +419,56 @@
     {
       "source": "vectors/settlement-response/voucher-only-success.json",
       "target": "v0.1.0-alpha.11/vectors/settlement-response/voucher-only-success.json",
-      "bytes": 1399,
-      "sha256": "c9925357819e4ed5a2eb04a832aeb18b567476a6f697545701aed8f561d7dd22"
+      "bytes": 1387,
+      "sha256": "4e2ef89135f084b5e6626043b7b2544751a909a399010010f15a0ff2e871e76b"
     },
     {
       "source": "vectors/tx-v1/batch-claim-second.json",
       "target": "v0.1.0-alpha.11/vectors/tx-v1/batch-claim-second.json",
-      "bytes": 23991,
-      "sha256": "9f68501fa75551e922794dcde408b4e388f477c8d9fbb69507a9f6280846bded"
+      "bytes": 24844,
+      "sha256": "d64c35dfff6e836c58a2c7c96dc4805a53e8549e394e586f89bd3af568d1b0b4"
     },
     {
       "source": "vectors/tx-v1/batch-claim.json",
       "target": "v0.1.0-alpha.11/vectors/tx-v1/batch-claim.json",
-      "bytes": 23996,
-      "sha256": "92c095d5986fe17f67b43707adca2dd489f97e136f50dbd8c21667626b5f0f1c"
+      "bytes": 24849,
+      "sha256": "b83aad77c89f1de4ae427e73a10ee392bfa0819420a4189dd870311d36dacc7b"
     },
     {
       "source": "vectors/tx-v1/batch-genesis.json",
       "target": "v0.1.0-alpha.11/vectors/tx-v1/batch-genesis.json",
-      "bytes": 11120,
-      "sha256": "4181fdf4f5e567c2245a2e5a51c75cbe47cc987eae63c1b8d61f44413f8141ae"
+      "bytes": 11381,
+      "sha256": "0eada1ed7694de1c5ee7fa7b9bf3648b0969627c101bbeafe62fbeb721d9462b"
     },
     {
       "source": "vectors/tx-v1/batch-refund.json",
       "target": "v0.1.0-alpha.11/vectors/tx-v1/batch-refund.json",
-      "bytes": 17285,
-      "sha256": "a96d4faf7b172f728ae01b4e59427ff4c0fa9770ba1315b1c07936192da0314c"
+      "bytes": 17866,
+      "sha256": "ec38f56cb3e3912fb6eeb058125668741eb62fe0d6e0b86a978f0306f21c4041"
     },
     {
       "source": "vectors/tx-v1/batch-top-up.json",
       "target": "v0.1.0-alpha.11/vectors/tx-v1/batch-top-up.json",
-      "bytes": 25302,
-      "sha256": "0a52dbf8c7a4ac2beabb8c566f1cc09fec1de81692d9c988a5a011d2bb80ef28"
+      "bytes": 26833,
+      "sha256": "0b568e0cb7c490d493f26eb7591fe3e88be10a31eef13fb6f8749162f895648b"
     },
     {
       "source": "vectors/tx-v1/plan.json",
       "target": "v0.1.0-alpha.11/vectors/tx-v1/plan.json",
-      "bytes": 2918,
-      "sha256": "acec7f80413e4edb3ecd99839fd6afc778435dfdfe652147610f4f2ce802a62b"
+      "bytes": 2942,
+      "sha256": "64641b54c9edf1490e4447a914aaa0f569ab8dd23ba2bbb71d070dc70c4458a0"
     },
     {
       "source": "vectors/voucher/stable-covenant-binding.json",
       "target": "v0.1.0-alpha.11/vectors/voucher/stable-covenant-binding.json",
-      "bytes": 2698,
-      "sha256": "0a19a5bb9bfc244ff13cc5fd4221275dc9874fa30cab71853327fcde97a220cf"
+      "bytes": 2802,
+      "sha256": "bb3de07448956b584af1617c0c3f054bb6a0fec98995808e3bf1468c71f3af53"
     },
     {
       "source": "vectors/x402-http/batch-voucher.json",
       "target": "v0.1.0-alpha.11/vectors/x402-http/batch-voucher.json",
-      "bytes": 8632,
-      "sha256": "3fd65ade1ea908220b2a863aafc9de86eaeb128c856319d5b742773ed17da14b"
+      "bytes": 11349,
+      "sha256": "c701173514fc4722f89850e5460654570e954065c66dab1a3086267042541dbd"
     },
     {
       "source": "vectors/x402-http/exact-transaction.json",
@@ -465,5 +477,5 @@
       "sha256": "36564ac622863b7621f3d95fb1fa6c8a126d813d238919c3aa856c4a04cd0508"
     }
   ],
-  "contentSha256": "013ebc5c1576a9e2fb2f7245e7f8bf2bcf8deed4c146ef30b7991361ff9baee9"
+  "contentSha256": "0baaa3ac0b6f98b5987785b0e62e55ef8eed00b069d2fbea5b0ad10912422dfe"
 }

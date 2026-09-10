@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { blake2b } from "blakejs";
 
 const EXPECTED_COMPILER_COMMIT =
-  "158534d606e9d5541e932c7575ff331e12699fb5";
+  "3ed973335b59269293564805cc2c58a14595ec03";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRelative = "contracts/kaspa-x402-escrow-v4.sil";
 const source = path.join(root, sourceRelative);

@@ -1,18 +1,18 @@
 [
   {
     "path": "/vectors/README.md",
-    "bytes": 4619,
-    "sha256": "11fc3131c2f23b44eb612729f22d0c98753e398288888ac04109f8d3157fadbd"
+    "bytes": 4645,
+    "sha256": "bb2c4fd13f6fdf70b97edbc39dfaec3661fb53a3c4f9dd6fd88bf528827c0eca"
   },
   {
-    "path": "/vectors/batch/interop-v2.json",
-    "bytes": 11149,
-    "sha256": "1f97e17aaa665c5e4cfb0efb8cffc7e977166cfafc60521607f945a86910cab8"
+    "path": "/vectors/batch/interop-v3.json",
+    "bytes": 13939,
+    "sha256": "315fddc504d2db417ca0572dc502905cbae9e1d74a09511442fb30a1636c1fd2"
   },
   {
     "path": "/vectors/channel-id/base.json",
     "bytes": 1618,
-    "sha256": "8b6b10b3104f9243cd29802939cde81678b5c7baf4ccd774571156b2cb60f5b0"
+    "sha256": "91f96ddc518b0545db216703fd10c0019eb740c167f8b5d7f7bb98cad877ca5b"
   },
   {
     "path": "/vectors/exact/consensus-profiles.json",
@@ -36,8 +36,13 @@
   },
   {
     "path": "/vectors/negative/batch-mainnet.json",
-    "bytes": 1048,
-    "sha256": "0d28c188d5fcd4ff8c1882062c36d8acca9e5b8772765ff0486e359e58d3c9e4"
+    "bytes": 1149,
+    "sha256": "58ddac686149a1e769908d2e4ddd42c8ed4b10f5849f0fd9e157cbe9ea0c9fe5"
+  },
+  {
+    "path": "/vectors/negative/batch-zero-charge.json",
+    "bytes": 1135,
+    "sha256": "c73ae1706fbcc37114e93a8b47376a9a350e20733bc2f9f161bbcc26c70dd798"
   },
   {
     "path": "/vectors/negative/deposit-success-missing-commitment.json",
@@ -95,6 +100,11 @@
     "sha256": "3efeb97f2929221e8ef9c9a3b7e8c2b5ffc044e651c565d331def50d1efd57d5"
   },
   {
+    "path": "/vectors/negative/legacy-batch-binding.json",
+    "bytes": 1127,
+    "sha256": "07cb23fc4db3a4319e7d5dda2c0feeec069ffd07c76d8054177f5deff229606d"
+  },
+  {
     "path": "/vectors/negative/missing-payment-identifier.json",
     "bytes": 2967,
     "sha256": "96dd61f6e4afac7c656ea1cb01a11e907e049e73174cfe8e9482fe7f1459ec70"
@@ -136,8 +146,8 @@
   },
   {
     "path": "/vectors/negative/wrong-binding.json",
-    "bytes": 980,
-    "sha256": "7bec2527d606ee0438bd10221c4fce4f30968b5db888010dd5ffaf3f3e732bdd"
+    "bytes": 1081,
+    "sha256": "e34616d6af1d49c27517ad26bbdeff3d3033f732e0434df18fe62913dea78ad7"
   },
   {
     "path": "/vectors/negative/wrong-scheme.json",
@@ -156,18 +166,18 @@
   },
   {
     "path": "/vectors/settlement-response/claim-success.json",
-    "bytes": 1489,
-    "sha256": "b2bd1ac1b41274c79664fae8900d37396e172d906a2b91c2685f1b10a5c59aeb"
+    "bytes": 1477,
+    "sha256": "3d526a77379af9771fb6e47ede762d109485b427b492a2ddf95a16e3392be4d7"
   },
   {
     "path": "/vectors/settlement-response/corrective-402.json",
-    "bytes": 2193,
-    "sha256": "70d78c17f0efb9ff9a9852014b10b67b20ddda0de7b4e3944cb790faf66983e1"
+    "bytes": 1958,
+    "sha256": "65e784538d5ec4e7b04aab515a0733efc3e7e8baaf661b51cd9558b988c6272d"
   },
   {
     "path": "/vectors/settlement-response/deposit-voucher-success.json",
-    "bytes": 1404,
-    "sha256": "e70b2cdd6d8512450584d357f2682b2c61e52cb86830653b367185c328dcd5f3"
+    "bytes": 1392,
+    "sha256": "bca629a65a7899e3e5fe9f2a79a29dce54827c02da7447af18736ea579c9abaf"
   },
   {
     "path": "/vectors/settlement-response/failure.json",
@@ -181,48 +191,48 @@
   },
   {
     "path": "/vectors/settlement-response/voucher-only-success.json",
-    "bytes": 1399,
-    "sha256": "c9925357819e4ed5a2eb04a832aeb18b567476a6f697545701aed8f561d7dd22"
+    "bytes": 1387,
+    "sha256": "4e2ef89135f084b5e6626043b7b2544751a909a399010010f15a0ff2e871e76b"
   },
   {
     "path": "/vectors/tx-v1/batch-claim-second.json",
-    "bytes": 23991,
-    "sha256": "9f68501fa75551e922794dcde408b4e388f477c8d9fbb69507a9f6280846bded"
+    "bytes": 24844,
+    "sha256": "d64c35dfff6e836c58a2c7c96dc4805a53e8549e394e586f89bd3af568d1b0b4"
   },
   {
     "path": "/vectors/tx-v1/batch-claim.json",
-    "bytes": 23996,
-    "sha256": "92c095d5986fe17f67b43707adca2dd489f97e136f50dbd8c21667626b5f0f1c"
+    "bytes": 24849,
+    "sha256": "b83aad77c89f1de4ae427e73a10ee392bfa0819420a4189dd870311d36dacc7b"
   },
   {
     "path": "/vectors/tx-v1/batch-genesis.json",
-    "bytes": 11120,
-    "sha256": "4181fdf4f5e567c2245a2e5a51c75cbe47cc987eae63c1b8d61f44413f8141ae"
+    "bytes": 11381,
+    "sha256": "0eada1ed7694de1c5ee7fa7b9bf3648b0969627c101bbeafe62fbeb721d9462b"
   },
   {
     "path": "/vectors/tx-v1/batch-refund.json",
-    "bytes": 17285,
-    "sha256": "a96d4faf7b172f728ae01b4e59427ff4c0fa9770ba1315b1c07936192da0314c"
+    "bytes": 17866,
+    "sha256": "ec38f56cb3e3912fb6eeb058125668741eb62fe0d6e0b86a978f0306f21c4041"
   },
   {
     "path": "/vectors/tx-v1/batch-top-up.json",
-    "bytes": 25302,
-    "sha256": "0a52dbf8c7a4ac2beabb8c566f1cc09fec1de81692d9c988a5a011d2bb80ef28"
+    "bytes": 26833,
+    "sha256": "0b568e0cb7c490d493f26eb7591fe3e88be10a31eef13fb6f8749162f895648b"
   },
   {
     "path": "/vectors/tx-v1/plan.json",
-    "bytes": 2918,
-    "sha256": "acec7f80413e4edb3ecd99839fd6afc778435dfdfe652147610f4f2ce802a62b"
+    "bytes": 2942,
+    "sha256": "64641b54c9edf1490e4447a914aaa0f569ab8dd23ba2bbb71d070dc70c4458a0"
   },
   {
     "path": "/vectors/voucher/stable-covenant-binding.json",
-    "bytes": 2698,
-    "sha256": "0a19a5bb9bfc244ff13cc5fd4221275dc9874fa30cab71853327fcde97a220cf"
+    "bytes": 2802,
+    "sha256": "bb3de07448956b584af1617c0c3f054bb6a0fec98995808e3bf1468c71f3af53"
   },
   {
     "path": "/vectors/x402-http/batch-voucher.json",
-    "bytes": 8632,
-    "sha256": "3fd65ade1ea908220b2a863aafc9de86eaeb128c856319d5b742773ed17da14b"
+    "bytes": 11349,
+    "sha256": "c701173514fc4722f89850e5460654570e954065c66dab1a3086267042541dbd"
   },
   {
     "path": "/vectors/x402-http/exact-transaction.json",
