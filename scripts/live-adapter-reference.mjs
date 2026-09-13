@@ -2969,7 +2969,7 @@ function makeChainProvider({
               dataDir,
               "claim-before-broadcast",
               {
-                format: "kaspa-x402-alpha11-claim-before-broadcast-v1",
+                format: "kaspa-x402-v1-rc1-claim-before-broadcast-v1",
                 capturedAt: new Date().toISOString(),
                 clientChannels: await batchRecovery.clientStore.loadChannels(
                   {},
@@ -3002,7 +3002,7 @@ function makeChainProvider({
             }
             batchRecovery.preBroadcastRefundSnapshotFile =
               persistBatchRecoveryRecord(dataDir, "refund-before-broadcast", {
-                format: "kaspa-x402-alpha11-refund-before-broadcast-v1",
+                format: "kaspa-x402-v1-rc1-refund-before-broadcast-v1",
                 capturedAt: new Date().toISOString(),
                 clientChannels: await batchRecovery.clientStore.loadChannels(
                   {},
@@ -5037,7 +5037,7 @@ async function verifyBatchRecoveryReload({
   const preBroadcast = JSON.parse(
     fs.readFileSync(batchRecovery.preBroadcastSnapshotFile, "utf8"),
   );
-  if (preBroadcast.format !== "kaspa-x402-alpha11-claim-before-broadcast-v1") {
+  if (preBroadcast.format !== "kaspa-x402-v1-rc1-claim-before-broadcast-v1") {
     throw new Error("pre-broadcast claim snapshot format is invalid");
   }
   const preBroadcastClientStore = new MemoryChannelStore(
@@ -5088,7 +5088,7 @@ async function verifyBatchRecoveryReload({
   }
 
   const snapshot = {
-    format: "kaspa-x402-alpha11-batch-recovery-v1",
+    format: "kaspa-x402-v1-rc1-batch-recovery-v1",
     capturedAt: new Date().toISOString(),
     clientChannels: await clientStore.loadChannels({}),
     serverChannels: await serverStore.listChannels(),
@@ -5193,7 +5193,7 @@ async function verifyBatchRefundRecoveryReload({
     throw new Error("pre-broadcast refund snapshot was not persisted");
   }
   const snapshot = JSON.parse(fs.readFileSync(file, "utf8"));
-  if (snapshot.format !== "kaspa-x402-alpha11-refund-before-broadcast-v1") {
+  if (snapshot.format !== "kaspa-x402-v1-rc1-refund-before-broadcast-v1") {
     throw new Error("pre-broadcast refund snapshot format is invalid");
   }
   const reloadedStore = new MemoryChannelStore(snapshot.clientChannels, [
@@ -5232,7 +5232,7 @@ async function verifyBatchRefundRecoveryReload({
     dataDir,
     "accepted-refund-snapshot",
     {
-      format: "kaspa-x402-alpha11-refund-applied-v1",
+      format: "kaspa-x402-v1-rc1-refund-applied-v1",
       capturedAt: new Date().toISOString(),
       clientChannels: await clientStore.loadChannels({}),
       attempt: currentAttempt,
