@@ -7,7 +7,7 @@ Historical release snapshots retain the language of the release they record.
 
 A payment for one request whose price is known before protected work begins. An
 exact payment transfers precisely the advertised native-KAS amount to the
-merchant. The active alpha supports two exact profiles.
+merchant. The active release candidate supports two exact profiles.
 
 ## Standard-native exact
 
@@ -49,8 +49,8 @@ metadata or transaction identifiers are not authoritative evidence.
 
 ## Batch settlement
 
-The capital-backed `kaspa-escrow-v2` mechanism for repeated small or
-variable-cost requests. The buyer signs lifetime cumulative voucher ceilings;
+The capital-backed `kaspa-escrow-v3` mechanism for repeated small or
+fixed-price requests. The buyer signs lifetime cumulative voucher ceilings;
 the provider may settle those ceilings through partial claims. Top-ups add
 capacity without resetting the settled lifetime total, and the buyer retains a
 timed refund path. It remains separate from both exact profiles and is supported
@@ -58,20 +58,20 @@ on `kaspa:testnet-10` only.
 
 ## Batch covenant identity
 
-The KIP-20 `covenantId` that identifies one `kaspa-x402-escrow-v2` channel and
+The KIP-20 `covenantId` that identifies one `kaspa-x402-escrow-v4` channel and
 enforces its successor lineage. The ID is stable across claims and top-ups, but
 it does not locate the live UTXO; the runtime must persist and reconcile the
 current outpoint separately.
 
 ## Batch channel state
 
-The current outpoint, remaining funding, actual-charge lifetime total, settled
+The current outpoint, remaining funding, committed-charge lifetime total, settled
 lifetime total, and latest buyer-signed lifetime ceiling for one batch covenant
-identity. Alpha.10 replaces the earlier active batch state outright; runtimes do
+identity. v1 RC1 replaces the earlier active batch state outright; runtimes do
 not import or interpret older-alpha channel state. Historical tagged releases
 remain unchanged.
 
-The accounting shorthand is A for lifetime actual charges, S for lifetime gross
-claimed, T for the latest buyer-signed lifetime ceiling, V for current covenant
-value, and R for the advertised minimum successor reserve. Durable runtimes
+The accounting shorthand is A for lifetime committed fixed charges, S for
+lifetime gross claimed, T for the latest buyer-signed lifetime ceiling, V for
+current covenant value, and R for the advertised minimum successor reserve. Durable runtimes
 reload the current head and unresolved transition attempts after restart.

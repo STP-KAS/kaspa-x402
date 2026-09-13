@@ -1,0 +1,242 @@
+[
+  {
+    "path": "/vectors/README.md",
+    "bytes": 4635,
+    "sha256": "39cd81fea0487cbbf996301e7d346962b32e3f91a312ef204bdab3537a2c665f"
+  },
+  {
+    "path": "/vectors/batch/interop-v3.json",
+    "bytes": 13937,
+    "sha256": "9f4079ec3ad83c9ca10a642a623c7fdbbf6137a54cd66c7b278cf611a3d152c1"
+  },
+  {
+    "path": "/vectors/channel-id/base.json",
+    "bytes": 1616,
+    "sha256": "8078d3bde65feb4cc00d260a357d2d314fd90cb0e871e571f399fc4c7f968888"
+  },
+  {
+    "path": "/vectors/exact/consensus-profiles.json",
+    "bytes": 8238,
+    "sha256": "8641cbaeb84289ac0e3fd87771b1356e3ce9762614b5d23fbfed1e2c426ac809"
+  },
+  {
+    "path": "/vectors/exact/interop-v1.json",
+    "bytes": 13229,
+    "sha256": "50e72df3c44edb8cce6b76bc8925c479eddcae8ff07eb6b8a0a65856874add94"
+  },
+  {
+    "path": "/vectors/negative/accepted-not-offered.json",
+    "bytes": 2334,
+    "sha256": "27bb5ffc98db16d6afa0e4b5d11a5fdb955d67af51afd894af723f55099e317e"
+  },
+  {
+    "path": "/vectors/negative/amount-overflow.json",
+    "bytes": 966,
+    "sha256": "4e23df3ccd9d39b3eac9f2615d243ed54375c411dad147bef1c4cacc1ebfb3a3"
+  },
+  {
+    "path": "/vectors/negative/batch-mainnet.json",
+    "bytes": 1147,
+    "sha256": "5217c43f20b46cdf5d4fc179e87bf8e9daa55e5fd9d3e75b26b221ffcb0bd68c"
+  },
+  {
+    "path": "/vectors/negative/batch-zero-charge.json",
+    "bytes": 1135,
+    "sha256": "c73ae1706fbcc37114e93a8b47376a9a350e20733bc2f9f161bbcc26c70dd798"
+  },
+  {
+    "path": "/vectors/negative/deposit-success-missing-commitment.json",
+    "bytes": 683,
+    "sha256": "2b753d9712ac02dda7c8c881c818f5f4e0978a13090f7bc91dfb4ab2d6c4b5ce"
+  },
+  {
+    "path": "/vectors/negative/deposit-success-with-amount.json",
+    "bytes": 811,
+    "sha256": "bacc3426622037845a3784040bcb6b9a1e2567d7120dc98f688c85401eed0417"
+  },
+  {
+    "path": "/vectors/negative/empty-success-with-amount.json",
+    "bytes": 1351,
+    "sha256": "d380a519ae6e8298cc1859ce13b3c80682110e4f692df464d2a3eb48a0ef2b95"
+  },
+  {
+    "path": "/vectors/negative/empty-success-without-commitment.json",
+    "bytes": 434,
+    "sha256": "0b577f568c4a654fb76a74f6b7d498065ba6e150c81d72d964326ffb26802bbd"
+  },
+  {
+    "path": "/vectors/negative/exact-additive-missing-challenge.json",
+    "bytes": 2416,
+    "sha256": "32cf9e5f03dec0f7b10c42140e1964811c68cf8038cdb18a3b923cf590d1c02d"
+  },
+  {
+    "path": "/vectors/negative/exact-additive-partial-head.json",
+    "bytes": 955,
+    "sha256": "2421869b5c963733f8c40a1fcf299d68d59e4f9686d97d0aa2c08653d6d16ec6"
+  },
+  {
+    "path": "/vectors/negative/exact-transaction-missing-transaction.json",
+    "bytes": 350,
+    "sha256": "4c1bfa46fa59765c1575c0a9c54894e7a2bf44be9dad819d71cc9b05083414e5"
+  },
+  {
+    "path": "/vectors/negative/exact-transfer-unsupported.json",
+    "bytes": 946,
+    "sha256": "873e4c6a972c9615856dd4039b105eae820dc940b1be35648bdadc4942832fd7"
+  },
+  {
+    "path": "/vectors/negative/float-amount.json",
+    "bytes": 960,
+    "sha256": "9331d6bd0191c168141151bb52694f62ebf7a976b7fa0e94a20a49637405e1fc"
+  },
+  {
+    "path": "/vectors/negative/hex-key-too-short.json",
+    "bytes": 925,
+    "sha256": "b815a15088d8f33010088208981c16116b8bc368e0c902cacf0ca4dd94552bdb"
+  },
+  {
+    "path": "/vectors/negative/invalid-asset.json",
+    "bytes": 942,
+    "sha256": "3efeb97f2929221e8ef9c9a3b7e8c2b5ffc044e651c565d331def50d1efd57d5"
+  },
+  {
+    "path": "/vectors/negative/legacy-batch-binding.json",
+    "bytes": 1125,
+    "sha256": "32d4a2a60eb9d41dd3b62b9a22fe638dc43182b86ac68ce28bac8ea7c2965db4"
+  },
+  {
+    "path": "/vectors/negative/missing-payment-identifier.json",
+    "bytes": 2967,
+    "sha256": "96dd61f6e4afac7c656ea1cb01a11e907e049e73174cfe8e9482fe7f1459ec70"
+  },
+  {
+    "path": "/vectors/negative/non-colon-network.json",
+    "bytes": 978,
+    "sha256": "b0c59f2779fca08126cea2436d456f9bddf46b3d3cfb03373ed159d324b8c255"
+  },
+  {
+    "path": "/vectors/negative/outpoint-index-overflow.json",
+    "bytes": 1030,
+    "sha256": "481d3249239e9a7ea6bdc40100b45b2b93e2e69dc17532325cb44c922ed98923"
+  },
+  {
+    "path": "/vectors/negative/payment-identifier-conflict.json",
+    "bytes": 708,
+    "sha256": "f09eb00cc1ba1d4bd2e5471038f722f844a7133ad70fdef2b8a41b537416a968"
+  },
+  {
+    "path": "/vectors/negative/scheme-payload-mismatch.json",
+    "bytes": 1660,
+    "sha256": "2e6c3f6a0e5415194e8d9ea8da0711a80ab63945ddf297697ca740e8554647ac"
+  },
+  {
+    "path": "/vectors/negative/settlement-success-missing-amount.json",
+    "bytes": 661,
+    "sha256": "a82865750495846398a3dde52125392cd839740ba4b0845da20e325a9925a8f6"
+  },
+  {
+    "path": "/vectors/negative/txid-wrong-length.json",
+    "bytes": 926,
+    "sha256": "e8363239ef7f1247c6d1619d7c448370232389c6bcd33bafe0dcaa6433ecf190"
+  },
+  {
+    "path": "/vectors/negative/voucher-signature-wrong-length.json",
+    "bytes": 880,
+    "sha256": "dbd9ae3c7af351fbaa7017be12baf1d1e4686568bde6084c296215c6f1418e67"
+  },
+  {
+    "path": "/vectors/negative/wrong-binding.json",
+    "bytes": 1081,
+    "sha256": "e34616d6af1d49c27517ad26bbdeff3d3033f732e0434df18fe62913dea78ad7"
+  },
+  {
+    "path": "/vectors/negative/wrong-scheme.json",
+    "bytes": 961,
+    "sha256": "a5cb9ae0717af72087401c6b6447c88325c2d9539cfe68798aab6d3a5e430a7f"
+  },
+  {
+    "path": "/vectors/negative/wrong-x402-version.json",
+    "bytes": 952,
+    "sha256": "934220963292e3618dba26d3de7c7a0f217829e2c634cb0d4f3008a2cb9f6975"
+  },
+  {
+    "path": "/vectors/negative/zero-covenant-id.json",
+    "bytes": 1014,
+    "sha256": "2bdfaf02ad35dfd6010e0c6915245869592a8bc38888a1f77986d3f82cd83411"
+  },
+  {
+    "path": "/vectors/settlement-response/claim-success.json",
+    "bytes": 1477,
+    "sha256": "3d526a77379af9771fb6e47ede762d109485b427b492a2ddf95a16e3392be4d7"
+  },
+  {
+    "path": "/vectors/settlement-response/corrective-402.json",
+    "bytes": 1958,
+    "sha256": "65e784538d5ec4e7b04aab515a0733efc3e7e8baaf661b51cd9558b988c6272d"
+  },
+  {
+    "path": "/vectors/settlement-response/deposit-voucher-success.json",
+    "bytes": 1392,
+    "sha256": "bca629a65a7899e3e5fe9f2a79a29dce54827c02da7447af18736ea579c9abaf"
+  },
+  {
+    "path": "/vectors/settlement-response/failure.json",
+    "bytes": 326,
+    "sha256": "5549227a11dffd22e15dbd85bce69db9f84a9c97ccf1d84dd8e1f56e9ea21b00"
+  },
+  {
+    "path": "/vectors/settlement-response/refund-success.json",
+    "bytes": 727,
+    "sha256": "e2f11775c9f333ee1cd8e3a15ca5dc8a1d787b6b3834bcc47c4bc63729501583"
+  },
+  {
+    "path": "/vectors/settlement-response/voucher-only-success.json",
+    "bytes": 1387,
+    "sha256": "4e2ef89135f084b5e6626043b7b2544751a909a399010010f15a0ff2e871e76b"
+  },
+  {
+    "path": "/vectors/tx-v1/batch-claim-second.json",
+    "bytes": 24844,
+    "sha256": "d64c35dfff6e836c58a2c7c96dc4805a53e8549e394e586f89bd3af568d1b0b4"
+  },
+  {
+    "path": "/vectors/tx-v1/batch-claim.json",
+    "bytes": 24849,
+    "sha256": "b83aad77c89f1de4ae427e73a10ee392bfa0819420a4189dd870311d36dacc7b"
+  },
+  {
+    "path": "/vectors/tx-v1/batch-genesis.json",
+    "bytes": 11381,
+    "sha256": "0eada1ed7694de1c5ee7fa7b9bf3648b0969627c101bbeafe62fbeb721d9462b"
+  },
+  {
+    "path": "/vectors/tx-v1/batch-refund.json",
+    "bytes": 17866,
+    "sha256": "ec38f56cb3e3912fb6eeb058125668741eb62fe0d6e0b86a978f0306f21c4041"
+  },
+  {
+    "path": "/vectors/tx-v1/batch-top-up.json",
+    "bytes": 26833,
+    "sha256": "0b568e0cb7c490d493f26eb7591fe3e88be10a31eef13fb6f8749162f895648b"
+  },
+  {
+    "path": "/vectors/tx-v1/plan.json",
+    "bytes": 2940,
+    "sha256": "55221812252a2d78c3478838b84422647b449ef17bc4cde3208986bd50c27562"
+  },
+  {
+    "path": "/vectors/voucher/stable-covenant-binding.json",
+    "bytes": 2800,
+    "sha256": "2770e768c3cf4a0715e6175648f619da2d092b40044652da1fdfc11e3aed431e"
+  },
+  {
+    "path": "/vectors/x402-http/batch-voucher.json",
+    "bytes": 11347,
+    "sha256": "6a4f6b74270ceb29c1fc5d34dec2cb7ecbf58fead93f0b0ba0141052d99298ce"
+  },
+  {
+    "path": "/vectors/x402-http/exact-transaction.json",
+    "bytes": 13933,
+    "sha256": "36564ac622863b7621f3d95fb1fa6c8a126d813d238919c3aa856c4a04cd0508"
+  }
+]

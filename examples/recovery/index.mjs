@@ -10,17 +10,10 @@ const exact = await client.paidFetch("https://api.example.test/download", {
 });
 
 const [serverChannel] = await serverStore.listChannels();
-const corrective = server.buildPaymentRequired({
+const freshRequirement = server.buildPaymentRequired({
   resource: { url: "https://api.example.test/metered" },
   amount: "50000",
   scheme: "batch-settlement",
-  channel: serverChannel,
-  voucherState: serverChannel.voucherSignature
-    ? {
-        amount: serverChannel.signedMaxClaimable,
-        signature: serverChannel.voucherSignature,
-      }
-    : undefined,
 });
 const exactReplay = await facilitator.verify({
   x402Version: X402_VERSION,
@@ -43,9 +36,13 @@ console.log(
         recoveryMaterial: ["deposit-voucher payload", "latest voucher payload", "funding UTXO"],
       },
       exactReplay,
-      corrective402: {
-        hasChannelState: Boolean(corrective.accepts[0].extra.channelState),
-        hasVoucherState: Boolean(corrective.accepts[0].extra.voucherState),
+      fresh402: {
+        hasChannelState: Boolean(
+          freshRequirement.accepts[0].extra.channelState,
+        ),
+        voucherRemainsClientLocal: Boolean(
+          batch.payment.channel.latestVoucher,
+        ),
       },
       refundPreview: {
         refundableChannels: refundable.length,

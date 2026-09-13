@@ -5,46 +5,40 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  ESCROW_V4_COMPILED_BASE,
+  ESCROW_V4_COMPILED_BASE_SHA256,
+  ESCROW_V4_CONSTRUCTOR_SLOTS,
+  ESCROW_V4_LAUNCH_IDENTITY,
+  ESCROW_V4_SELECTORS,
+  ESCROW_V4_SOURCE_PATH,
+  ESCROW_V4_SOURCE_SHA256,
   ESCROW_TEMPLATE_ID,
-  ESCROW_V2_TEMPLATE_ID,
-  ESCROW_V2_VOUCHER_DOMAIN,
-  ESCROW_V2_VOUCHER_DOMAIN_TAG,
   ESCROW_VOUCHER_DOMAIN,
   ESCROW_VOUCHER_DOMAIN_TAG,
   SCRIPT_INT64_MAX,
   buildClaimArgs,
-  buildClaimV2Args,
   buildEscrowRedeemScript,
-  buildEscrowV2RedeemScript,
   buildKip10AdditiveBorrowArgs,
   buildKip10AdditiveBorrowSignatureScript,
   buildKip10AdditiveRedeemScript,
   buildRefundArgs,
-  buildRefundV2Args,
   buildTopUpArgs,
-  buildTopUpV2Args,
   checkEscrowFixtureReproducibility,
-  checkEscrowV2FixtureReproducibility,
   deriveEscrowAddress,
-  deriveEscrowV2Address,
   escrowScriptPubKeyHash,
   escrowScriptPublicKey,
-  escrowV2ScriptPubKeyHash,
-  escrowV2ScriptPublicKey,
   kip10AdditiveScriptPublicKey,
   parseKip10AdditiveRedeemScript,
   serializedScriptPublicKey,
   voucherDigest,
   voucherPreimage,
-  voucherV2Digest,
-  voucherV2Preimage,
 } from "../src/index.js";
 import type { EscrowFixture } from "../src/index.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 function fixture(): EscrowFixture {
-  return JSON.parse(fs.readFileSync(path.join(repoRoot, "contracts/fixtures/kaspa-x402-escrow-v2.json"), "utf8")) as EscrowFixture;
+  return JSON.parse(fs.readFileSync(path.join(repoRoot, "contracts/fixtures/kaspa-x402-escrow-v4.json"), "utf8")) as EscrowFixture;
 }
 
 function withoutState(redeemScript: string, stateLayout: { start: number; len: number }): string {
@@ -53,12 +47,9 @@ function withoutState(redeemScript: string, stateLayout: { start: number; len: n
 }
 
 describe("stateful escrow covenant template", () => {
-  it("makes escrow-v2 the only active unsuffixed template", () => {
-    expect(ESCROW_TEMPLATE_ID).toBe("kaspa-x402-escrow-v2");
-    expect(ESCROW_V2_TEMPLATE_ID).toBe(ESCROW_TEMPLATE_ID);
-    expect(ESCROW_VOUCHER_DOMAIN).toBe("kaspa:x402:escrow-voucher:v2");
-    expect(ESCROW_V2_VOUCHER_DOMAIN).toBe(ESCROW_VOUCHER_DOMAIN);
-    expect(ESCROW_V2_VOUCHER_DOMAIN_TAG).toBe(ESCROW_VOUCHER_DOMAIN_TAG);
+  it("exposes only the active escrow-v4 template", () => {
+    expect(ESCROW_TEMPLATE_ID).toBe("kaspa-x402-escrow-v4");
+    expect(ESCROW_VOUCHER_DOMAIN).toBe("kaspa:x402:escrow-voucher:v3");
     expect(crypto.createHash("sha256").update(ESCROW_VOUCHER_DOMAIN).digest("hex")).toBe(ESCROW_VOUCHER_DOMAIN_TAG);
   });
 
@@ -68,11 +59,12 @@ describe("stateful escrow covenant template", () => {
 
     expect(crypto.createHash("sha256").update(source).digest("hex")).toBe(item.sourceSha256);
     expect(checkEscrowFixtureReproducibility(item, source).ok).toBe(true);
-    expect(checkEscrowV2FixtureReproducibility(item, source).ok).toBe(true);
     expect(buildEscrowRedeemScript(item.sample.params)).toBe(item.sample.genesis.redeemScript);
-    expect(buildEscrowV2RedeemScript(item.sample.params)).toBe(item.sample.genesis.redeemScript);
 
-    const successorParams = { ...item.sample.params, settledTotal: item.sample.successor.settledTotal };
+    const successorParams = {
+      ...item.sample.params,
+      claimedCumulativeAmount: item.sample.successor.claimedCumulativeAmount,
+    };
     expect(buildEscrowRedeemScript(successorParams)).toBe(item.sample.successor.redeemScript);
     expect(item.sample.genesis.redeemScript).not.toBe(item.sample.successor.redeemScript);
     expect(withoutState(item.sample.genesis.redeemScript, item.stateLayout)).toBe(
@@ -80,48 +72,69 @@ describe("stateful escrow covenant template", () => {
     );
   });
 
+  it("binds the launch identity to the checked source and compiled base", () => {
+    const source = fs.readFileSync(
+      path.join(repoRoot, ESCROW_V4_SOURCE_PATH),
+    );
+    const sourceHash = crypto.createHash("sha256").update(source).digest("hex");
+    const compiledBaseHash = crypto
+      .createHash("sha256")
+      .update(Buffer.from(ESCROW_V4_COMPILED_BASE, "hex"))
+      .digest("hex");
+
+    expect(sourceHash).toBe(ESCROW_V4_SOURCE_SHA256);
+    expect(compiledBaseHash).toBe(ESCROW_V4_COMPILED_BASE_SHA256);
+    expect(ESCROW_V4_LAUNCH_IDENTITY.source).toEqual({
+      path: ESCROW_V4_SOURCE_PATH,
+      sha256: sourceHash,
+    });
+    expect(ESCROW_V4_LAUNCH_IDENTITY.bytecode).toEqual({
+      templateId: ESCROW_TEMPLATE_ID,
+      compiledBaseSha256: compiledBaseHash,
+    });
+  });
+
   it("keeps silverc transition offsets invariant across timeout values", () => {
     const item = fixture();
-    const zeroTimeout = buildEscrowV2RedeemScript({
+    const zeroTimeout = buildEscrowRedeemScript({
       ...item.sample.params,
       timeoutDaa: "0",
     });
-    const runtimeTimeout = buildEscrowV2RedeemScript({
+    const runtimeTimeout = buildEscrowRedeemScript({
       ...item.sample.params,
       timeoutDaa: "123456789",
     });
 
     for (const instantiated of [zeroTimeout, runtimeTimeout]) {
-      expect(instantiated.length / 2).toBe(946);
-      expect(instantiated.match(/02b203/g)).toHaveLength(2);
-      expect(instantiated.match(/02a883/g)).toHaveLength(2);
+      expect(instantiated.length / 2).toBe(item.constructorLayout.redeemScriptBytes);
+      expect(withoutState(instantiated, item.stateLayout).length).toBe(withoutState(item.sample.genesis.redeemScript, item.stateLayout).length);
     }
   });
 
   it("treats transition-like constructor bytes as ordinary data", () => {
     const item = fixture();
     const collidingClient = `02b20302a883${"11".repeat(26)}`;
-    const instantiated = buildEscrowV2RedeemScript({
+    const instantiated = buildEscrowRedeemScript({
       ...item.sample.params,
       clientPublicKey: collidingClient,
       timeoutDaa: "123456789",
     });
 
     expect(instantiated).toContain(`20${collidingClient}`);
-    expect(instantiated.match(/02b203/g)).toHaveLength(5);
-    expect(instantiated.match(/02a883/g)).toHaveLength(5);
+    expect(instantiated.length / 2).toBe(item.constructorLayout.redeemScriptBytes);
   });
 
   it("derives state-specific script public keys and addresses", () => {
     const item = fixture();
     const genesis = escrowScriptPublicKey(item.sample.params);
-    const successor = escrowScriptPublicKey({ ...item.sample.params, settledTotal: item.sample.successor.settledTotal });
+    const successor = escrowScriptPublicKey({
+      ...item.sample.params,
+      claimedCumulativeAmount: item.sample.successor.claimedCumulativeAmount,
+    });
 
-    expect(genesis).toEqual(escrowV2ScriptPublicKey(item.sample.params));
     expect(genesis).toEqual({ version: item.sample.genesis.scriptPublicKey.version, script: item.sample.genesis.scriptPublicKey.script });
     expect(serializedScriptPublicKey(genesis)).toBe(item.sample.genesis.scriptPublicKey.serialized);
     expect(escrowScriptPubKeyHash(genesis)).toBe(item.sample.genesis.scriptPublicKey.hash);
-    expect(escrowV2ScriptPubKeyHash(genesis)).toBe(item.sample.genesis.scriptPublicKey.hash);
     expect(successor.script).toBe(item.sample.successor.scriptPublicKey.script);
     expect(successor.script).not.toBe(genesis.script);
 
@@ -131,7 +144,6 @@ describe("stateful escrow covenant template", () => {
       return "kaspatest:qfixture";
     };
     expect(deriveEscrowAddress(item.sample.params, encode)).toBe("kaspatest:qfixture");
-    expect(deriveEscrowV2Address(item.sample.params, encode)).toBe("kaspatest:qfixture");
   });
 
   it("encodes claim, top-up, and refund ABI selectors", () => {
@@ -139,19 +151,49 @@ describe("stateful escrow covenant template", () => {
     const claimInput = {
       serverSignature: "ab".repeat(65),
       voucherSignature: "cd".repeat(64),
-      totalAuthorized: item.sample.voucher.totalAuthorized,
+      authorizedCumulativeAmount: item.sample.voucher.authorizedCumulativeAmount,
       claimAmount: item.sample.voucher.claimAmount,
     };
 
     expect(buildClaimArgs(claimInput)).toBe(item.sample.claimArgsWithDummies);
-    expect(buildClaimV2Args(claimInput)).toBe(item.sample.claimArgsWithDummies);
-    expect(item.sample.claimArgsWithDummies.endsWith("00")).toBe(true);
-    expect(buildTopUpArgs({ clientSignature: "ab".repeat(65) })).toBe(item.sample.topUpArgsWithDummySig);
-    expect(buildTopUpV2Args({ clientSignature: "ab".repeat(65) })).toBe(item.sample.topUpArgsWithDummySig);
-    expect(item.sample.topUpArgsWithDummySig.endsWith("51")).toBe(true);
+    expect(item.sample.claimArgsWithDummies.endsWith("0423959b42")).toBe(true);
+    expect(
+      buildTopUpArgs({
+        clientSignature: "ab".repeat(65),
+        providerSignature: "ef".repeat(65),
+      }),
+    ).toBe(item.sample.topUpArgsWithDummySignatures);
+    expect(item.sample.topUpArgsWithDummySignatures.endsWith("04ae09679c")).toBe(true);
     expect(buildRefundArgs({ clientSignature: "ab".repeat(65) })).toBe(item.sample.refundArgsWithDummySig);
-    expect(buildRefundV2Args({ clientSignature: "ab".repeat(65) })).toBe(item.sample.refundArgsWithDummySig);
-    expect(item.sample.refundArgsWithDummySig.endsWith("52")).toBe(true);
+    expect(item.sample.refundArgsWithDummySig.endsWith("0417a2027b")).toBe(true);
+  });
+
+  it("keeps exported launch metadata recursively immutable and isolated", () => {
+    const item = fixture();
+    const claimInput = {
+      serverSignature: "ab".repeat(65),
+      voucherSignature: "cd".repeat(64),
+      authorizedCumulativeAmount: item.sample.voucher.authorizedCumulativeAmount,
+      claimAmount: item.sample.voucher.claimAmount,
+    };
+    const before = buildClaimArgs(claimInput);
+
+    expect(Object.isFrozen(ESCROW_V4_SELECTORS)).toBe(true);
+    expect(Object.isFrozen(ESCROW_V4_CONSTRUCTOR_SLOTS)).toBe(true);
+    expect(
+      Object.isFrozen(ESCROW_V4_CONSTRUCTOR_SLOTS.serverPublicKey.offsets),
+    ).toBe(true);
+    expect(() => {
+      (ESCROW_V4_SELECTORS as unknown as Record<string, string>).claim =
+        "00000000";
+    }).toThrow();
+    expect(() => {
+      (ESCROW_V4_CONSTRUCTOR_SLOTS.serverPublicKey.offsets as unknown as number[]).push(
+        999,
+      );
+    }).toThrow();
+    expect(buildClaimArgs(claimInput)).toBe(before);
+    expect(ESCROW_V4_LAUNCH_IDENTITY.identitySha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("rejects malformed ABI values and unsigned-64 overflow", () => {
@@ -159,17 +201,28 @@ describe("stateful escrow covenant template", () => {
       buildClaimArgs({
         serverSignature: "ab".repeat(64),
         voucherSignature: "cd".repeat(64),
-        totalAuthorized: "1",
+        authorizedCumulativeAmount: "1",
         claimAmount: "1",
       }),
     ).toThrow("serverSignature must be 65 bytes");
-    expect(() => buildTopUpArgs({ clientSignature: "ab".repeat(64) })).toThrow("clientSignature must be 65 bytes");
+    expect(() =>
+      buildTopUpArgs({
+        clientSignature: "ab".repeat(64),
+        providerSignature: "ef".repeat(65),
+      }),
+    ).toThrow("clientSignature must be 65 bytes");
+    expect(() =>
+      buildTopUpArgs({
+        clientSignature: "ab".repeat(65),
+        providerSignature: "ef".repeat(64),
+      }),
+    ).toThrow("providerSignature must be 65 bytes");
     expect(() => buildRefundArgs({ clientSignature: "ab".repeat(64) })).toThrow("clientSignature must be 65 bytes");
     expect(() =>
       buildClaimArgs({
         serverSignature: "ab".repeat(65),
         voucherSignature: "cd".repeat(64),
-        totalAuthorized: SCRIPT_INT64_MAX + 1n,
+        authorizedCumulativeAmount: SCRIPT_INT64_MAX + 1n,
         claimAmount: "1",
       }),
     ).toThrow("signed 64-bit script number");
@@ -177,7 +230,7 @@ describe("stateful escrow covenant template", () => {
       buildClaimArgs({
         serverSignature: "ab".repeat(65),
         voucherSignature: "cd".repeat(64),
-        totalAuthorized: "1",
+        authorizedCumulativeAmount: "1",
         claimAmount: "0",
       }),
     ).toThrow("claimAmount must be positive");
@@ -188,21 +241,19 @@ describe("stateful escrow covenant template", () => {
     const input = {
       network: item.sample.params.network,
       covenantId: item.sample.covenantId,
-      totalAuthorized: item.sample.voucher.totalAuthorized,
+      authorizedCumulativeAmount: item.sample.voucher.authorizedCumulativeAmount,
     };
 
     expect(voucherPreimage(input)).toBe(item.sample.voucher.preimage);
-    expect(voucherV2Preimage(input)).toBe(item.sample.voucher.preimage);
     expect(voucherDigest(input)).toBe(item.sample.voucher.digest);
-    expect(voucherV2Digest(input)).toBe(item.sample.voucher.digest);
     expect(voucherPreimage(input).length / 2).toBe(104);
     expect(voucherDigest({ ...input, network: "kaspa:mainnet" })).not.toBe(item.sample.voucher.digest);
     expect(voucherDigest({ ...input, covenantId: "88".repeat(32) })).not.toBe(item.sample.voucher.digest);
-    expect(voucherDigest({ ...input, totalAuthorized: "5000001" })).not.toBe(item.sample.voucher.digest);
+    expect(voucherDigest({ ...input, authorizedCumulativeAmount: "5000001" })).not.toBe(item.sample.voucher.digest);
     expect(() => voucherDigest({ ...input, covenantId: "77".repeat(31) })).toThrow("covenantId must be 32 bytes");
     expect(() => voucherDigest({ ...input, covenantId: "00".repeat(32) })).toThrow("bound KIP-20 lineage");
-    expect(() => voucherDigest({ ...input, totalAuthorized: SCRIPT_INT64_MAX + 1n })).toThrow("signed 64-bit script number");
-    expect(() => voucherDigest({ ...input, totalAuthorized: "0" })).toThrow("totalAuthorized must be positive");
+    expect(() => voucherDigest({ ...input, authorizedCumulativeAmount: SCRIPT_INT64_MAX + 1n })).toThrow("signed 64-bit script number");
+    expect(() => voucherDigest({ ...input, authorizedCumulativeAmount: "0" })).toThrow("authorizedCumulativeAmount must be positive");
   });
 
   it("encodes state as fixed-width signed int64 and rejects overflow", () => {
@@ -216,17 +267,17 @@ describe("stateful escrow covenant template", () => {
     expect(successor.subarray(item.stateLayout.start, item.stateLayout.start + item.stateLayout.len).toString("hex")).toBe(
       "08a025260000000000",
     );
-    const maxState = Buffer.from(buildEscrowRedeemScript({ ...item.sample.params, settledTotal: SCRIPT_INT64_MAX }), "hex");
+    const maxState = Buffer.from(buildEscrowRedeemScript({ ...item.sample.params, claimedCumulativeAmount: SCRIPT_INT64_MAX }), "hex");
     expect(maxState.subarray(item.stateLayout.start, item.stateLayout.start + item.stateLayout.len).toString("hex")).toBe(
       "08ffffffffffffff7f",
     );
-    expect(() => buildEscrowRedeemScript({ ...item.sample.params, settledTotal: SCRIPT_INT64_MAX + 1n })).toThrow(
-      "settledTotal must fit in signed 64-bit script number",
+    expect(() => buildEscrowRedeemScript({ ...item.sample.params, claimedCumulativeAmount: SCRIPT_INT64_MAX + 1n })).toThrow(
+      "claimedCumulativeAmount must fit in signed 64-bit script number",
     );
   });
 
   it("keeps singleton, payout, change, and termination guards explicit", () => {
-    const source = fs.readFileSync(path.join(repoRoot, "contracts/kaspa-x402-escrow-v2.sil"), "utf8");
+    const source = fs.readFileSync(path.join(repoRoot, "contracts/kaspa-x402-escrow-v4.sil"), "utf8");
 
     expect(source.match(/groups = single/g)).toHaveLength(2);
     expect(source.match(/OpCovInputCount\(covenantId\) == 1/g)).toHaveLength(3);
@@ -235,8 +286,9 @@ describe("stateful escrow covenant template", () => {
     expect(source).toContain("sha256(tx.outputs[0].scriptPubKey) == payoutScriptPublicKeyHash");
     expect(source).toContain("sha256(tx.outputs[1].scriptPubKey) == refundScriptPublicKeyHash");
     expect(source).toContain("sha256(tx.outputs[0].scriptPubKey) == refundScriptPublicKeyHash");
-    expect(source).toContain("int available = totalAuthorized - previous.settledTotal");
-    expect(source).toContain("settledTotal: previous.settledTotal + claimAmount");
+    expect(source).toContain("int available = authorizedCumulativeAmount - previous.claimedCumulativeAmount");
+    expect(source).toContain("claimedCumulativeAmount: previous.claimedCumulativeAmount + claimAmount");
+    expect(source).toContain("checkSig(providerSig, server)");
     expect(source).not.toContain("outpointTransactionHash");
   });
 });

@@ -2,12 +2,12 @@
 
 Covenant helpers for the Kaspa x402 `batch-settlement` binding.
 
-Status: alpha. The current artifacts support testnet review and deterministic
+Status: release candidate. The current artifacts support testnet review and deterministic
 fixture checks; they are not audited for production mainnet funds.
 
 This package builds deterministic redeem scripts, signature-script argument
 blobs, fixture checks, and transaction-v1 reference artifacts for
-`kaspa-x402-escrow-v2`. The stateful KIP-20 template binds the client key,
+`kaspa-x402-escrow-v4`. The stateful KIP-20 template binds the client key,
 server key, network hash, payout script-public-key hash, refund
 script-public-key hash, timeout, and lifetime settled total. It does not
 hold private keys, broadcast transactions, or encode wallet addresses. Address

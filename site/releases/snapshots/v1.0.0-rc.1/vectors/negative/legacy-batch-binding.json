@@ -1,0 +1,32 @@
+{
+  "kind": "negative",
+  "name": "legacy-batch-binding",
+  "description": "The v1 RC1 clean cutover rejects the former batch binding and escrow template.",
+  "schema": "https://kaspa-x402.org/schemas/payment-required.schema.json",
+  "expectedError": "invalid_kaspa_x402_binding",
+  "value": {
+    "x402Version": 2,
+    "resource": {
+      "url": "https://api.example.com/metered"
+    },
+    "accepts": [
+      {
+        "scheme": "batch-settlement",
+        "network": "kaspa:testnet-10",
+        "amount": "1000000",
+        "asset": "KAS",
+        "payTo": "kaspatest:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+        "maxTimeoutSeconds": 60,
+        "extra": {
+          "binding": "kaspa-escrow-v2",
+          "templateId": "kaspa-x402-escrow-v3",
+          "serverPublicKey": "4444444444444444444444444444444444444444444444444444444444444444",
+          "minDepositSompi": "90000000",
+          "claimReserveSompi": "2000000",
+          "refundTimeoutDaa": "123456789",
+          "securityContextHash": "7777777777777777777777777777777777777777777777777777777777777777"
+        }
+      }
+    ]
+  }
+}

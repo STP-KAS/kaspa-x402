@@ -36,6 +36,7 @@ export interface GatewayConfig {
   maxTimeoutSeconds: number;
   claimFeeSompi: SompiString;
   rateLimitPerMinute: number;
+  globalConcurrency: number;
   corsOrigin: string;
   siteBaseUrl: string;
   releaseVersion: string;
@@ -129,8 +130,8 @@ export function readGatewayConfig(env: GatewayEnv): GatewayConfig {
       "KASPA_X402_GATEWAY_ENABLED",
     ),
     network,
-    chainApiBase: required(
-      env.KASPA_X402_CHAIN_API_BASE,
+    chainApiBase: baseUrl(
+      required(env.KASPA_X402_CHAIN_API_BASE, "KASPA_X402_CHAIN_API_BASE"),
       "KASPA_X402_CHAIN_API_BASE",
     ),
     payTo,
@@ -160,13 +161,19 @@ export function readGatewayConfig(env: GatewayEnv): GatewayConfig {
       1,
       600,
     ),
+    globalConcurrency: uint(
+      env.KASPA_X402_GLOBAL_CONCURRENCY ?? "64",
+      "KASPA_X402_GLOBAL_CONCURRENCY",
+      1,
+      256,
+    ),
     corsOrigin: env.KASPA_X402_CORS_ORIGIN ?? "https://kaspa-x402.org",
     siteBaseUrl: baseUrl(
       env.KASPA_X402_SITE_BASE_URL ?? "https://kaspa-x402.org",
       "KASPA_X402_SITE_BASE_URL",
     ),
     releaseVersion: releaseVersion(
-      env.KASPA_X402_RELEASE_VERSION ?? "0.1.0-alpha.10",
+      env.KASPA_X402_RELEASE_VERSION ?? "1.0.0-rc.1",
     ),
     gatewayBaseUrl: baseUrl(
       env.KASPA_X402_GATEWAY_BASE_URL ?? "https://demo.kaspa-x402.org",
@@ -198,9 +205,9 @@ export function readGatewayConfig(env: GatewayEnv): GatewayConfig {
 
 function releaseVersion(value: string): string {
   const normalized = value.trim();
-  if (!/^0\.1\.0-alpha\.\d+$/.test(normalized)) {
+  if (normalized !== "1.0.0-rc.1") {
     throw new Error(
-      "KASPA_X402_RELEASE_VERSION must be an alpha release version",
+      "KASPA_X402_RELEASE_VERSION must be 1.0.0-rc.1",
     );
   }
   return normalized;
@@ -256,7 +263,13 @@ function pnnEndpoints(value: string): string[] {
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
+  if (entries.length > 8) {
+    throw new Error("KASPA_X402_PNN_ENDPOINTS accepts at most 8 entries");
+  }
   for (const entry of entries) {
+    if (entry.length > 2_048) {
+      throw new Error("KASPA_X402_PNN_ENDPOINTS entries are too long");
+    }
     const parsed = new URL(entry);
     if (parsed.protocol !== "wss:" && parsed.protocol !== "ws:") {
       throw new Error(
@@ -272,6 +285,11 @@ function pnnEndpoints(value: string): string[] {
         "KASPA_X402_PNN_ENDPOINTS must use wss except for localhost",
       );
     }
+    if (parsed.username || parsed.password || parsed.hash) {
+      throw new Error(
+        "KASPA_X402_PNN_ENDPOINTS must not contain credentials or fragments",
+      );
+    }
   }
   return entries;
 }
@@ -279,6 +297,9 @@ function pnnEndpoints(value: string): string[] {
 function baseUrl(value: string, name: string): string {
   const text = value.trim();
   const parsed = new URL(text);
+  if (parsed.username || parsed.password) {
+    throw new Error(`${name} must not contain credentials`);
+  }
   if (
     parsed.protocol !== "https:" &&
     parsed.hostname !== "127.0.0.1" &&

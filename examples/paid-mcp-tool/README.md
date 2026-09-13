@@ -10,29 +10,42 @@ node examples/paid-mcp-tool/index.mjs
 Server-side tool wrapper:
 
 ```ts
+import { decodeMcpToolCallParams } from "@kaspa-x402/core";
 import { handlePaidMcpToolCall } from "@kaspa-x402/server";
 
 function quoteArgs(value: unknown): { symbol: string } {
-  if (value && typeof value === "object" && "symbol" in value && typeof value.symbol === "string") {
+  if (
+    value &&
+    typeof value === "object" &&
+    "symbol" in value &&
+    typeof value.symbol === "string"
+  ) {
     return { symbol: value.symbol };
   }
   throw new Error("symbol is required");
 }
 
+// Use this decoder when the embedding exposes raw JSON bytes.
+const params = decodeMcpToolCallParams(rawParams);
 const result = await handlePaidMcpToolCall(
   directModeServer,
   {
     audience: "https://mcp.example.test",
     name: "quote",
-    resource: { url: "mcp://tool/quote", description: "Paid quote tool", mimeType: "application/json" },
+    resource: {
+      url: "mcp://tool/quote",
+      description: "Paid quote tool",
+      mimeType: "application/json",
+    },
     amount: "100000",
     scheme: "batch-settlement",
+    mcpErrorChargeSompi: "100000",
   },
   params,
   async ({ params }) => {
     const args = quoteArgs(params.arguments);
     return {
-      chargedAmount: "75000",
+      chargedAmount: "100000",
       result: {
         structuredContent: { quote: `quote for ${args.symbol}` },
         content: [{ type: "text", text: "paid quote ready" }],
@@ -60,6 +73,10 @@ const paid = await paidMcpToolCall(
 console.log(paid.result._meta?.["x402/payment-response"]);
 ```
 
-The server returns `structuredContent` plus text fallback for unpaid calls. The client retries with `_meta["x402/payment"]`. Successful paid results carry `_meta["x402/payment-response"]`.
+The server returns `structuredContent` plus text fallback for unpaid calls. The
+client retries with `_meta["x402/payment"]`. Successful paid results carry
+`_meta["x402/payment-response"]`. Batch tools must disclose an error charge
+equal to the fixed request amount; that term is included in payer authorization
+before an `isError` result can be charged.
 
 The runnable script uses the same helper flow in mock mode with a batch-settlement quote tool. It prints the charged amount and confirms that payment response metadata is present.

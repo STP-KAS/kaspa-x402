@@ -10,11 +10,11 @@ against the Kaspa network.
   https://demo.kaspa-x402.org
 - Browser test client: https://kaspa-x402.org/demo/
 
-Status: alpha. Everything targets `kaspa:testnet-10`. Mainnet use is blocked
+Status: v1 release candidate. Everything targets `kaspa:testnet-10`. Mainnet use is blocked
 by the gates in [docs/mainnet-readiness.md](docs/mainnet-readiness.md), and
 reference runtimes require explicit `allowMainnet` opt-in. Package names,
-schemas, and field names may change until the first tagged spec release.
-Alpha.10 is a clean replacement of the earlier batch binding: active runtimes
+schemas, and field names may change before the stable `1.0.0` release.
+v1 RC1 is a clean replacement of the earlier batch binding: active runtimes
 do not read or migrate older-alpha channel state. Tagged alpha releases remain
 immutable historical snapshots.
 
@@ -38,9 +38,10 @@ The binding ships two x402 schemes:
   "scheme": "batch-settlement",
   "network": "kaspa:<network>",
   "asset": "KAS",
-  "amount": "<max per-request sompi>",
+  "amount": "<fixed per-request sompi>",
   "extra": {
-    "binding": "kaspa-escrow-v2"
+    "binding": "kaspa-escrow-v3",
+    "templateId": "kaspa-x402-escrow-v4"
   }
 }
 ```
@@ -50,8 +51,8 @@ default ordinary KAS payment. Optional `additive` spends and recreates a
 merchant-owned KIP-10 head; the successor increase equals the advertised exact
 amount and is the only merchant payment. Unpaid offers do not reserve or retire
 heads.
-`batch-settlement` funds a `kaspa-x402-escrow-v2` covenant and meters repeated
-or variable-cost requests with buyer-signed lifetime cumulative vouchers. A
+`batch-settlement` funds a `kaspa-x402-escrow-v4` covenant and meters repeated
+fixed-price requests with buyer-signed lifetime cumulative vouchers. A
 KIP-20 `covenantId` gives the channel stable identity and enforceable lineage
 across successors; the runtime still persists the current outpoint because the
 ID is not a reverse lookup for its live UTXO. The provider can make partial
@@ -69,6 +70,13 @@ additional buyer covenant value.
 Batch refund locks are absolute DAA scores below the consensus timestamp
 boundary, and become eligible only after the chain DAA strictly exceeds the
 advertised score.
+
+Testnet-10 covenant transitions require 30 selected-chain confirmations in the
+reference deployment. Authoritative selected-chain traversal supplies that
+depth; accepting-block and checkpoint blue scores are retained as evidence but
+are never subtracted to infer it. The runtime journals removed blocks before
+replacements and recovers the current head from verified transaction lineage.
+This is a deployment policy, not a universal Kaspa consensus-finality claim.
 
 ## What's Here
 
@@ -116,7 +124,7 @@ adapters. Live Testnet-10 proof is fail-closed and adapter-driven; see
 
 ## Packages
 
-Published alpha packages (install with an explicit prerelease tag):
+Public release-candidate packages (install with `@rc` or the exact version):
 
 ```text
 @kaspa-x402/core

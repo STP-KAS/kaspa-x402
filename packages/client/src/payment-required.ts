@@ -3,6 +3,7 @@ import {
   KASPA_LOCK_TIME_THRESHOLD,
   decodePaymentRequiredEnvelopeHeader,
   narrowPaymentRequiredEnvelope,
+  normalizePaymentRequirementsHex,
   parseBatchLaneAmount,
   parseSompiString,
   type FundingOutpoint,
@@ -97,8 +98,8 @@ export function selectBatchPaymentRequired(
         requirement.scheme === "batch-settlement" &&
         supportedNetworks.includes(requirement.network) &&
         requirement.asset === "KAS" &&
-        requirement.extra.binding === "kaspa-escrow-v2" &&
-        requirement.extra.templateId === "kaspa-x402-escrow-v2"
+        requirement.extra.binding === "kaspa-escrow-v3" &&
+        requirement.extra.templateId === "kaspa-x402-escrow-v4"
       );
     },
   );
@@ -130,7 +131,12 @@ function narrowKaspaPaymentRequired(
 
   const narrowed = narrowPaymentRequiredEnvelope(paymentRequired);
   if (!narrowed.ok) throw narrowed.error;
-  return narrowed.value.paymentRequired;
+  return {
+    ...narrowed.value.paymentRequired,
+    accepts: narrowed.value.paymentRequired.accepts.map(
+      normalizePaymentRequirementsHex,
+    ),
+  };
 }
 
 function isSupportedKaspaRequirement(
@@ -142,8 +148,8 @@ function isSupportedKaspaRequirement(
   }
   return (
     requirement.scheme === "batch-settlement" &&
-    requirement.extra.binding === "kaspa-escrow-v2" &&
-    requirement.extra.templateId === "kaspa-x402-escrow-v2"
+    requirement.extra.binding === "kaspa-escrow-v3" &&
+    requirement.extra.templateId === "kaspa-x402-escrow-v4"
   );
 }
 
@@ -161,6 +167,12 @@ function validateSupportedRequirement(
 
 function validateBatchTerms(accepted: BatchPaymentRequirements): void {
   const amount = parseBatchLaneAmount(accepted.amount, "batch payment amount");
+  if (amount === 0n) {
+    throw new KaspaX402Error(
+      "invalid_kaspa_x402_amount",
+      "batch payment amount must be positive",
+    );
+  }
   const minimumDeposit = parseBatchLaneAmount(
     accepted.extra.minDepositSompi,
     "minimum deposit",

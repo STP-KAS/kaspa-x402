@@ -3,6 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import {
+  sanitizeProofOutputText,
+  stringifySanitizedProofOutput,
+  writePrivateProofJson,
+} from "./proof-output-security.mjs";
+
 const options = readOptions(process.argv.slice(2));
 const fileEnv = readOptionalEnv(options.envFile);
 const env = { ...nonEmptyValues(fileEnv), ...process.env };
@@ -24,7 +30,7 @@ const requiredFlows = [
   "tiny and normal standard-native exact settlement",
   "KIP-10 additive-head exact-delta settlement and replay rejection",
   "multiple additive head shards",
-  "concurrent additive conflict and loser refresh",
+  "concurrent additive conflict with unresolved loser held pending",
   "duplicate exact settlement idempotency",
   "invalid exact signature rejected before protected work",
   "expired exact authorization rejected before protected work",
@@ -362,10 +368,10 @@ function validateLiveProofResult(result, flows) {
 
   require(result.exact?.conflict?.winnerStatus === 200 &&
     result.exact?.conflict?.loserStatus === 402 &&
-    result.exact?.conflict?.retryStatus ===
-      200, "exact.conflict", "must prove one winner, one refreshed loser, and one successful retry");
+    result.exact?.conflict?.replacementBlocked ===
+      true, "exact.conflict", "must prove one winner and keep the unresolved loser from creating a replacement");
   require(result.exact?.conflict?.handlerExecutions ===
-    2, "exact.conflict.handlerExecutions", "must execute protected work only for the winner and retry");
+    1, "exact.conflict.handlerExecutions", "must execute protected work only for the winner");
   require(result.exact?.invalidSignature?.handlerExecutions === 0 &&
     result.exact?.invalidSignature?.broadcasts ===
       0, "exact.invalidSignature", "must reject before protected work or broadcast");
@@ -393,15 +399,15 @@ function validateLiveProofResult(result, flows) {
   const restartReload = result.batch?.restartReload;
   require(
     restartReload?.snapshotFormat ===
-      "kaspa-x402-alpha10-batch-recovery-v1",
+      "kaspa-x402-v1-rc1-batch-recovery-v1",
     "batch.restartReload.snapshotFormat",
-    "must use the Alpha.10 recovery snapshot",
+    "must use the v1 RC1 recovery snapshot",
   );
   require(
     restartReload?.preBroadcastSnapshotFormat ===
-      "kaspa-x402-alpha10-claim-before-broadcast-v1",
+      "kaspa-x402-v1-rc1-claim-before-broadcast-v1",
     "batch.restartReload.preBroadcastSnapshotFormat",
-    "must reload the exact pre-broadcast Alpha.10 claim snapshot",
+    "must reload the exact pre-broadcast v1 RC1 claim snapshot",
   );
   require(
     restartReload?.preBroadcastClaimAttemptStatus === "pending",
@@ -1389,16 +1395,16 @@ function validateLiveProofResult(result, flows) {
     "must persist accepted terminal state in the client store",
   );
   require(
-    refund?.serverState === "retired",
+    refund?.serverState === "refunded",
     "batch.refund.serverState",
-    "must retire the terminal lineage in the server store",
+    "must persist the terminal refunded lineage in the server store",
   );
   const refundRecovery = refund?.recovery;
   require(
     refundRecovery?.preBroadcastSnapshotFormat ===
-      "kaspa-x402-alpha10-refund-before-broadcast-v1" &&
+      "kaspa-x402-v1-rc1-refund-before-broadcast-v1" &&
       refundRecovery?.appliedSnapshotFormat ===
-        "kaspa-x402-alpha10-refund-applied-v1",
+        "kaspa-x402-v1-rc1-refund-applied-v1",
     "batch.refund.recovery",
     "must reload both the pre-broadcast and atomically applied refund snapshots",
   );
@@ -1513,7 +1519,11 @@ function readOptions(argv) {
   try {
     return parseArgs(argv);
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(
+      sanitizeProofOutputText(
+        error instanceof Error ? error.message : String(error),
+      ),
+    );
     process.exit(1);
   }
 }
@@ -1523,7 +1533,11 @@ function readOptionalEnv(file) {
   try {
     return readEnvFile(file);
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(
+      sanitizeProofOutputText(
+        error instanceof Error ? error.message : String(error),
+      ),
+    );
     process.exit(1);
   }
 }
@@ -1532,11 +1546,11 @@ function readEnvFile(file) {
   const resolved = path.resolve(file);
   const lines = fs.readFileSync(resolved, "utf8").split(/\r?\n/);
   const values = {};
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
     const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(trimmed);
-    if (!match) throw new Error(`invalid env file line: ${line}`);
+    if (!match) throw new Error(`invalid env file line ${index + 1}`);
     values[match[1]] = unquote(match[2]);
   }
   return values;
@@ -1586,8 +1600,7 @@ function redactedConfig(current) {
 
 function redact(value) {
   if (!value) return "";
-  if (value.length <= 12) return "<set>";
-  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+  return "<set>";
 }
 
 async function importAdapter(specifier) {
@@ -1604,9 +1617,7 @@ async function importAdapter(specifier) {
 
 function writeJson(file, value, { onlyIfRequested = false } = {}) {
   if (onlyIfRequested) return;
-  const resolved = path.resolve(file);
-  fs.mkdirSync(path.dirname(resolved), { recursive: true });
-  fs.writeFileSync(resolved, `${JSON.stringify(value, null, 2)}\n`);
+  writePrivateProofJson(file, value, { secrets: proofOutputSecrets() });
 }
 
 function writeRecovery(file, current, currentReport) {
@@ -1623,5 +1634,13 @@ function writeRecovery(file, current, currentReport) {
 }
 
 function printReport(value) {
-  console.log(JSON.stringify(value, null, 2));
+  console.log(
+    stringifySanitizedProofOutput(value, {
+      secrets: proofOutputSecrets(),
+    }).trimEnd(),
+  );
+}
+
+function proofOutputSecrets() {
+  return [config.rpcUrl, config.fundingWallet];
 }

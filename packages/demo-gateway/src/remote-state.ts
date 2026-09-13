@@ -2,6 +2,8 @@ import type {
   BatchCommitmentRecord,
   BatchSettlementAttemptRecord,
   BatchSettlementClaimResult,
+  ChannelOperationLeaseClaimResult,
+  ChannelOperationLeaseRecord,
   ClaimAttemptRecord,
   ExactPaymentRecord,
   ExactSettlementCommit,
@@ -13,6 +15,7 @@ import type {
   ExactSettlementAttemptRecord,
   ExactSettlementClaimResult,
   PaymentIdentifierRecord,
+  PaymentIdentifierReservationRecord,
   ProtectedHandlerResult,
   ServerChannelRecord,
   SettlementCommit,
@@ -20,16 +23,20 @@ import type {
 import type {
   GatewayCanaryReport,
   ExactHeadStats,
+  GatewayPublicAdmissionResult,
   GatewayStateClient,
   GatewayStateMethod,
   GatewayStateRequest,
 } from "./state.js";
+import { GATEWAY_COORDINATION_DOMAIN } from "./state.js";
 
 export type GatewayStateNamespace = Env["GATEWAY_STATE"];
-export const GATEWAY_STATE_OBJECT_NAME = "demo-gateway-alpha.10";
+export const GATEWAY_STATE_OBJECT_NAME = "demo-gateway-v1.0.0-rc.1";
 
 export class RemoteGatewayState implements GatewayStateClient {
-  readonly #stub: DurableObjectStub;
+  readonly coordinationScope = "deployment-wide" as const;
+  readonly coordinationDomain = GATEWAY_COORDINATION_DOMAIN;
+  readonly #stub: ReturnType<GatewayStateNamespace["get"]>;
 
   constructor(
     namespace: GatewayStateNamespace,
@@ -42,16 +49,58 @@ export class RemoteGatewayState implements GatewayStateClient {
     return this.#call("loadChannel", { channelId });
   }
 
-  saveChannel(channel: ServerChannelRecord): Promise<void> {
-    return this.#call("saveChannel", { channel });
+  registerChannel(channel: ServerChannelRecord): Promise<void> {
+    return this.#call("registerChannel", { channel });
   }
 
-  retireChannel(channelId: string, reason?: string): Promise<void> {
-    return this.#call("retireChannel", { channelId, reason });
+  retireChannel(
+    channelId: string,
+    leaseId: string,
+    expected: ServerChannelRecord,
+    reason?: string,
+  ): Promise<void> {
+    return this.#call("retireChannel", {
+      channelId,
+      leaseId,
+      expected,
+      reason,
+    });
   }
 
   listChannels(): Promise<ServerChannelRecord[]> {
     return this.#call("listChannels");
+  }
+
+  applyCovenantLineage(
+    expected: ServerChannelRecord,
+    channel: ServerChannelRecord,
+    leaseId: string,
+  ): Promise<void> {
+    return this.#call("applyCovenantLineage", { expected, channel, leaseId });
+  }
+
+  claimChannelOperation(
+    record: ChannelOperationLeaseRecord,
+  ): Promise<ChannelOperationLeaseClaimResult> {
+    return this.#call("claimChannelOperation", { record });
+  }
+
+  loadChannelOperation(
+    channelId: string,
+  ): Promise<ChannelOperationLeaseRecord | undefined> {
+    return this.#call("loadChannelOperation", { channelId });
+  }
+
+  abandonChannelOperation(
+    leaseId: string,
+    reason: string,
+    observedAt: string,
+  ): Promise<void> {
+    return this.#call("abandonChannelOperation", {
+      leaseId,
+      reason,
+      observedAt,
+    });
   }
 
   loadCommitment(
@@ -100,10 +149,28 @@ export class RemoteGatewayState implements GatewayStateClient {
     });
   }
 
+  abandonBatchSettlement(
+    attemptId: string,
+    reason: string,
+    observedAt: string,
+  ): Promise<void> {
+    return this.#call("abandonBatchSettlement", {
+      attemptId,
+      reason,
+      observedAt,
+    });
+  }
+
   loadPaymentIdentifier(
     id: string,
   ): Promise<PaymentIdentifierRecord | undefined> {
     return this.#call("loadPaymentIdentifier", { id });
+  }
+
+  loadPaymentIdentifierReservation(
+    id: string,
+  ): Promise<PaymentIdentifierReservationRecord | undefined> {
+    return this.#call("loadPaymentIdentifierReservation", { id });
   }
 
   loadExactPayment(
@@ -277,6 +344,19 @@ export class RemoteGatewayState implements GatewayStateClient {
 
   releaseLock(key: string, token: string): Promise<void> {
     return this.#call("releaseLock", { key, token });
+  }
+
+  acquirePublicAdmission(
+    token: string,
+    nowMs: number,
+    limit: number,
+    ttlMs: number,
+  ): Promise<GatewayPublicAdmissionResult> {
+    return this.#stub.acquirePublicAdmission(token, nowMs, limit, ttlMs);
+  }
+
+  releasePublicAdmission(token: string): Promise<void> {
+    return this.#stub.releasePublicAdmission(token);
   }
 
   checkRateLimit(

@@ -39,8 +39,8 @@ transaction id, and transaction-version evidence. Additive evidence must also
 identify the durable head/version and consumed outpoint and prove
 `successorAmount - headAmount == advertisedAmount`. Claim evidence must
 reconcile the funding input, covenant id, previous on-chain lifetime settled
-amount, outstanding actual charge, claim amount, provider output, fee, successor
-state/value, and new current outpoint. Top-up evidence must preserve the
+amount, outstanding committed charge, claim amount, provider output, fee,
+successor state/value, and new current outpoint. Top-up evidence must preserve the
 covenant id and state while increasing value. Refund evidence must reconcile
 the current input, terminal same-id count, refund amount, and fee. Batch
 voucher-only evidence must prove it continues the same channel and covenant id
@@ -58,12 +58,18 @@ The reference adapter also writes generated channel and payout keys under
 operational metadata and signing material. The committed sanitized summary is
 `docs/live-testnet-report.md`.
 
+That public summary must identify the chain-evidence source class and the
+number of independently operated sources used for acceptance, confirmation,
+UTXO, and selected-chain lineage. Multiple fallback endpoints operated as one
+trust source do not count as corroboration.
+
 The runner's recovery file is not a resumable transaction journal. A production
 or release-candidate live adapter should maintain its own pre-submit recovery
 record with:
 
 - network;
-- template id;
+- checked compiler commit and command, source path and SHA-256, template id,
+  compiled-bytecode SHA-256, ABI/selectors, and launch identity;
 - client public key;
 - server public key;
 - refund timeout DAA score;
@@ -89,7 +95,7 @@ record with:
 - Refuse to accept missing accepted-or-confirmed finality for funding,
   settlement, claim, or refund transactions.
 - Refuse any batch arithmetic value above signed-int64 maximum.
-- Refuse to claim more than either outstanding actual charges or remaining
+- Refuse to claim more than either outstanding committed charges or remaining
   voucher authorization.
 - Refuse a claim unless the continuation equals `inputAmount - claimAmount`
   and the fee reduces only the provider output.

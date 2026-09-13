@@ -1,18 +1,20 @@
 # Testnet Gateway
 
-Status: paid-canary-proven Alpha.10 deployment on `kaspa:testnet-10`.
+Status: v1 RC1 deployment candidate on `kaspa:testnet-10`; funded deployment
+proof is pending.
 
 The hosted gateway is a public integration target for implementers exercising
 the Kaspa x402 wire flow against a real server. It is not a wallet, custodian,
 mainnet service, or availability commitment.
 
-The current Worker uses `kaspa-exact-v2` with the default `standard-native`
-profile and also supports `batch-settlement`. The optional `additive` exact
-profile is implemented but is advertised only when a current KIP-10 head is
-available.
+The v1 RC1 candidate uses `kaspa-exact-v2` with the default
+`standard-native` profile and also supports `batch-settlement`. The optional
+`additive` exact profile is implemented but is advertised only when a current
+KIP-10 head is available.
 
 Historical gateway evidence remains available in the immutable
-[release snapshots](/releases/). This page describes only the active alpha.
+[release snapshots](/releases/). This page separates the v1 RC1 candidate
+from historical deployment evidence.
 
 ## Base URL
 
@@ -25,7 +27,7 @@ https://demo.kaspa-x402.org
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/` | JSON endpoint index. |
-| `GET` | `/health` | Configuration health and current TN10 chain evidence. |
+| `GET` | `/health` | Shallow configuration and process health; no upstream calls or endpoint URLs. |
 | `GET` | `/canary` | Enabled state and latest scheduled canary report. |
 | `GET` | `/supported` | Supported x402 schemes and profiles. |
 | `GET` | `/exact`, `/exact/report` | Protected exact-payment resources. |
@@ -52,6 +54,7 @@ The gateway uses:
 - `network: "kaspa:testnet-10"`;
 - `asset: "KAS"`;
 - accepted finality;
+- 30-confirmation covenant transition and lineage policy;
 - exact price `20000000` sompi;
 - batch voucher charge `500` sompi;
 - batch minimum deposit `20000000` sompi;
@@ -64,8 +67,8 @@ mass depends on the complete transaction shape. The reference Worker uses
 `10000000` sompi as a conservative application policy for on-chain outputs,
 including the advertised batch successor reserve.
 
-The deployed Worker emits batch offers with binding `kaspa-escrow-v2`, template
-`kaspa-x402-escrow-v2`, and a `10000000` sompi claim reserve. Its exact offers
+The v1 RC1 candidate Worker emits batch offers with binding `kaspa-escrow-v3`, template
+`kaspa-x402-escrow-v4`, and a `10000000` sompi claim reserve. Its exact offers
 carry binding `kaspa-exact-v2` and an explicit profile:
 
 - `standard-native` needs no merchant head inventory;
@@ -119,10 +122,24 @@ The Worker uses `https://api-tn10.kaspa.org` for read-side evidence:
 Exact transaction artifacts are submitted through configured public TN10
 PNN/WSS endpoints. The REST submit fallback must not be cited as KIP-10
 broadcast evidence because it does not preserve the v1 compute-budget field.
+The same PNN connection supplies complete `GetVirtualChainFromBlockV2` deltas
+for batch lineage recovery. REST UTXO presence does not prove removed-chain
+continuity or authorize a recovered batch head.
 
 The gateway fails closed when it cannot establish chain health, transaction
 validity, accepted finality, or required durable state. Protected content is
 not produced for unsupported schemes or unverifiable payments.
+
+### Accepted Single-Source Limitation
+
+The reference gateway and live harness currently trust one configured source
+for exact acceptance, batch genesis/current-UTXO state, and PNN selected-chain
+evidence. These N03-N05 findings are accepted only for Testnet-10 testing with
+one source. A faulty source could provide consistently false evidence.
+
+This design must not be enabled for mainnet. Mainnet requires independently
+corroborated chain evidence or another audited Byzantine-resilient design;
+unknown or disagreeing evidence must fail closed.
 
 ## Durable State
 
@@ -132,6 +149,8 @@ Gateway state is held in a SQLite-backed Cloudflare Durable Object. It records:
 - reusable additive heads and atomic successor advancement;
 - payment-identifier response cache entries;
 - batch channel state and settlement commitments;
+- immutable batch launch manifests, append-only lineage journals, selected-chain
+  checkpoints, and atomically derived current heads;
 - request locks, rate counters, metrics, and the latest canary report.
 
 No private keys or wallet seeds are stored. This is a demo deployment pattern,
@@ -147,12 +166,12 @@ exposes `PAYMENT-REQUIRED` and `PAYMENT-RESPONSE`. Paid retries may send
 it only over TLS to the intended gateway and do not publish or log unused
 payment headers or transaction material.
 
-## Current Alpha.10 Evidence
+## Historical Alpha.10 Evidence
 
-The 2026-08-10 deployment completed funded exact and batch runs:
+The 2026-08-10 Alpha.10 deployment completed funded exact and batch runs:
 
 - Worker version `c57eb755-e169-4a00-ac4a-5e035371cad1`, built from commit
-  `78f2ada` and using fresh `demo-gateway-alpha.10` state;
+  `78f2ada` and using Alpha.10 state;
 - `/supported` advertised `kaspa-exact-v2` and `kaspa-escrow-v2`;
 - unpaid `/exact` returned a valid `20000000` sompi offer without inventory;
 - transaction id
@@ -170,9 +189,9 @@ The 2026-08-10 deployment completed funded exact and batch runs:
 - the scheduled canary passed TN10 REST, release-snapshot, schema, docs, offer,
   and unsupported-scheme checks.
 
-The Alpha.10 source, package, specification, vector, and live-proof gates were
-completed before deployment. The evidence above is from the released source
-and public npm package version.
+This evidence predates the v1 RC1 alias controls, fresh
+`demo-gateway-v1.0.0-rc.1` state, and `kaspa-x402-escrow-v4` template. It must not
+be used as v1 RC1 deployment or funded-canary proof.
 
 ## Testnet Funding
 

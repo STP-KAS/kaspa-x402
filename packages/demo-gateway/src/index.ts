@@ -1,7 +1,18 @@
 import { DurableObject } from "cloudflare:workers";
-import { handleGatewayRequest, runGatewayCanary } from "./gateway.js";
+import { KASPA_X402_RESOURCE_BUDGET } from "@kaspa-x402/core";
+import {
+  handleGatewayRequest,
+  readRequestJsonWithLimit,
+  runGatewayCanary,
+} from "./gateway.js";
 import type { GatewayEnv } from "./config.js";
-import { dispatchGatewayState, GatewayLedger, type GatewayStateRequest, type GatewayStorage } from "./state.js";
+import {
+  dispatchGatewayState,
+  GatewayLedger,
+  type GatewayPublicAdmissionResult,
+  type GatewayStateRequest,
+  type GatewayStorage,
+} from "./state.js";
 
 export class GatewayState extends DurableObject<GatewayEnv> {
   readonly #ledger: GatewayLedger;
@@ -11,23 +22,66 @@ export class GatewayState extends DurableObject<GatewayEnv> {
     this.#ledger = new GatewayLedger(ctx.storage as GatewayStorage);
   }
 
+  acquirePublicAdmission(
+    token: string,
+    nowMs: number,
+    limit: number,
+    ttlMs: number,
+  ): Promise<GatewayPublicAdmissionResult> {
+    return this.#ledger.acquirePublicAdmission(token, nowMs, limit, ttlMs);
+  }
+
+  releasePublicAdmission(token: string): Promise<void> {
+    return this.#ledger.releasePublicAdmission(token);
+  }
+
   async fetch(request: Request): Promise<Response> {
-    if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+    if (request.method !== "POST")
+      return new Response("method not allowed", { status: 405 });
+    let payload: GatewayStateRequest;
     try {
-      const payload = (await request.json()) as GatewayStateRequest;
+      payload = await readRequestJsonWithLimit<GatewayStateRequest>(
+        request,
+        KASPA_X402_RESOURCE_BUDGET.maxDecodedHeaderBytes,
+        "gateway state",
+      );
+    } catch (error) {
+      return Response.json(
+        {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        { status: 400 },
+      );
+    }
+    try {
       const value = await dispatchGatewayState(this.#ledger, payload);
       return Response.json({ ok: true, value });
     } catch (error) {
-      return Response.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+      return Response.json(
+        {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        { status: 500 },
+      );
     }
   }
 }
 
 export default {
-  async fetch(request: Request, env: GatewayEnv, context: ExecutionContext): Promise<Response> {
+  async fetch(
+    request: Request,
+    env: GatewayEnv,
+    context: ExecutionContext,
+  ): Promise<Response> {
     return handleGatewayRequest(request, env, context);
   },
-  async scheduled(_event: ScheduledController, env: GatewayEnv, context: ExecutionContext): Promise<void> {
+  async scheduled(
+    _event: ScheduledController,
+    env: GatewayEnv,
+    context: ExecutionContext,
+  ): Promise<void> {
     context.waitUntil(runGatewayCanary(env, "scheduled"));
   },
 };

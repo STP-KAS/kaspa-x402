@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   MCP_PAYMENT_META_KEY,
   MCP_PAYMENT_RESPONSE_META_KEY,
+  KASPA_X402_RESOURCE_BUDGET,
   X402_VERSION,
+  batchPaymentRequirementsHash,
+  batchPresentationDigest,
+  bindRequestHashToTrustedContext,
   channelId,
   decodePaymentRequiredHeader,
   decodePaymentResponseHeader,
@@ -19,7 +23,9 @@ import {
   readMcpPaymentResponse,
   sha256Hex,
   stableStringify,
+  trustedSecurityContextHash,
   voucherDigest,
+  type AcceptedTransactionEvidence,
   type BatchPaymentRequirements,
   type ChannelConfig,
   type ExactPaymentRequirements,
@@ -29,6 +35,7 @@ import {
   type NetworkId,
   type PaymentPayload,
   type SettlementResponse,
+  type TrustedSecurityContext,
 } from "@kaspa-x402/core";
 import {
   buildKip10AdditiveRedeemScript,
@@ -50,6 +57,8 @@ import {
   type ChainUtxo,
   type ClaimAttemptRecord,
   type ClaimReconciliation,
+  type ClaimRecoveryInput,
+  type ChannelOperationLeaseRecord,
   type DirectModeServerConfig,
   type ExactHeadChallenge,
   type ExactHeadRecord,
@@ -73,6 +82,64 @@ const EXACT_HEAD_ID = "89".repeat(32);
 const MCP_AUDIENCE = "https://mcp.example.test";
 const EXACT_TRANSACTION_ARTIFACT = '{"transaction":"signed-kip10-exact"}';
 const RESOURCE = { url: "https://api.example.test/data" };
+const CONFIRMATION_THRESHOLD = 30;
+
+function acceptedChainEvidence(
+  transactionId: string,
+  confirmationCount = CONFIRMATION_THRESHOLD,
+): AcceptedTransactionEvidence {
+  const checkpointBlueScore = 1_000n;
+  return {
+    status: "accepted",
+    transactionId: transactionId.toLowerCase(),
+    acceptingBlockHash: sha256Hex(
+      `accepting-block:${transactionId.toLowerCase()}`,
+    ),
+    acceptingBlockBlueScore: (
+      checkpointBlueScore -
+      BigInt(confirmationCount) +
+      1n
+    ).toString(),
+    confirmationCount,
+    checkpoint: {
+      blockHash: "ee".repeat(32),
+      blueScore: checkpointBlueScore.toString(),
+      daaScore: "1000",
+    },
+  };
+}
+
+function unknownChainEvidence(
+  transactionId: string,
+  reason: string,
+): ClaimReconciliation["evidence"] {
+  return {
+    status: "unknown",
+    transactionId: transactionId.toLowerCase(),
+    reason,
+  };
+}
+
+function absentChainEvidence(
+  transactionId: string,
+  reason: string,
+): ClaimReconciliation["evidence"] {
+  return {
+    status: "absent",
+    transactionId: transactionId.toLowerCase(),
+    reason,
+    proof: {
+      kind: "consensus-rejection",
+      rejectedTransactionId: transactionId.toLowerCase(),
+      rejectionCode: "TX_REJECTED",
+      checkpoint: {
+        blockHash: "ee".repeat(32),
+        blueScore: "1000",
+        daaScore: "1000",
+      },
+    },
+  };
+}
 
 describe("direct-mode server", () => {
   it("returns PAYMENT-REQUIRED for unpaid requests", async () => {
@@ -85,6 +152,85 @@ describe("direct-mode server", () => {
 
     expect(response.status).toBe(402);
     expect(response.headers[PAYMENT_REQUIRED_HEADER]).toBeTruthy();
+  });
+
+  it("derives batch challenge context from host-trusted claims", async () => {
+    const setup = makeServer();
+    const trustedSecurityContext = {
+      principal: "user:alpha",
+      tenant: "tenant:one",
+      authorizationScopes: ["download"],
+      handlerState: { policyVersion: 3 },
+    } satisfies TrustedSecurityContext;
+    const response = await setup.server.handlePaidRequest(
+      {
+        url: RESOURCE.url,
+        resource: RESOURCE,
+        trustedSecurityContext,
+      },
+      async () => ({ body: "unreachable" }),
+    );
+    const required = decodePaymentRequiredHeader(
+      response.headers[PAYMENT_REQUIRED_HEADER]!,
+    );
+    const accepted = required.accepts[0] as BatchPaymentRequirements;
+    expect(accepted.extra.securityContextHash).toBe(
+      trustedSecurityContextHash(trustedSecurityContext),
+    );
+  });
+
+  it("accepts a deposit bound to host-trusted claims", async () => {
+    const setup = makeServer();
+    const trustedSecurityContext = {
+      principal: "user:alpha",
+      tenant: "tenant:one",
+      authorizationScopes: ["download"],
+    } satisfies TrustedSecurityContext;
+    const required = setup.server.buildPaymentRequired({
+      resource: RESOURCE,
+      trustedSecurityContext,
+    });
+    const payment = makeDepositPayment(setup, {
+      accepted: required.accepts[0] as BatchPaymentRequirements,
+    });
+
+    const response = await setup.server.handlePaidRequest(
+      requestWithPayment(payment.payload, { trustedSecurityContext }),
+      async () => ({ body: "context-bound", chargedAmount: "100" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toBe("context-bound");
+  });
+
+  it("never returns a batch cached response across trusted principals", async () => {
+    const setup = makeServer();
+    const principalA = { principal: "batch-user-a", tenant: "merchant" };
+    const principalB = { principal: "batch-user-b", tenant: "merchant" };
+    const accepted = setup.server.buildPaymentRequired({
+      resource: RESOURCE,
+      trustedSecurityContext: principalA,
+    }).accepts[0] as BatchPaymentRequirements;
+    const payment = makeDepositPayment(setup, { accepted });
+    const requestA = requestWithPayment(payment.payload, {
+      trustedSecurityContext: principalA,
+    });
+    const first = await setup.server.handlePaidRequest(requestA, async () => ({
+      body: "principal A batch secret",
+      chargedAmount: "100",
+    }));
+    let executed = false;
+    const crossPrincipal = await setup.server.handlePaidRequest(
+      { ...requestA, trustedSecurityContext: principalB },
+      async () => {
+        executed = true;
+        return { body: "wrong", chargedAmount: "100" };
+      },
+    );
+
+    expect(first.status).toBe(200);
+    expect(crossPrincipal.body).not.toBe("principal A batch secret");
+    expect(executed).toBe(false);
   });
 
   it("uses custom per-request amounts on unpaid requests", async () => {
@@ -102,7 +248,7 @@ describe("direct-mode server", () => {
     expect(required.accepts[0]?.amount).toBe("75");
   });
 
-  it("keeps opted-in exact mainnet support while rejecting Alpha.10 batch", async () => {
+  it("keeps opted-in exact mainnet support while rejecting v1 RC1 batch", async () => {
     expect(() => makeServer({ network: "kaspa:mainnet" })).toThrow(
       "allowMainnet",
     );
@@ -319,7 +465,36 @@ describe("direct-mode server", () => {
       "75",
     ]);
     expect(required.accepts[0]?.extra.binding).toBe("kaspa-exact-v2");
-    expect(required.accepts[1]?.extra.binding).toBe("kaspa-escrow-v2");
+    expect(required.accepts[1]?.extra.binding).toBe("kaspa-escrow-v3");
+  });
+
+  it("suppresses additive exact without a trusted settlement reconciler", async () => {
+    const setup = makeServer({ exactProfile: "additive" });
+
+    expect(setup.server.supportedKinds().map((kind) => kind.scheme)).toEqual([
+      "batch-settlement",
+    ]);
+    expect(() =>
+      setup.server.buildPaymentRequired({
+        resource: RESOURCE,
+        scheme: "exact",
+        exactHead: exactHeadChallenge(exactHead()),
+      }),
+    ).toThrow("trusted settlement reconciler");
+    expect(
+      setup.server
+        .buildPaymentRequired({
+          resource: RESOURCE,
+          schemes: ["exact", "batch-settlement"],
+        })
+        .accepts.map((accepted) => accepted.scheme),
+    ).toEqual(["batch-settlement"]);
+
+    const exactOnly = await setup.server.handlePaidRequest(
+      { url: RESOURCE.url, resource: RESOURCE, paymentScheme: "exact" },
+      async () => ({ body: "unreachable" }),
+    );
+    expect(exactOnly.status).toBe(503);
   });
 
   it("preserves batch fallback when an additive exact head is unavailable", async () => {
@@ -352,7 +527,7 @@ describe("direct-mode server", () => {
     expect(required.accepts.map((requirement) => requirement.scheme)).toEqual([
       "batch-settlement",
     ]);
-    expect(required.accepts[0]?.extra.binding).toBe("kaspa-escrow-v2");
+    expect(required.accepts[0]?.extra.binding).toBe("kaspa-escrow-v3");
   });
 
   it("returns MCP payment requirements for unpaid tool calls", async () => {
@@ -384,6 +559,171 @@ describe("direct-mode server", () => {
     expect(required?.accepts[0]?.scheme).toBe("exact");
     expect(required?.accepts[0]?.amount).toBe("75");
     expect(executed).toBe(false);
+  });
+
+  it("rejects over-budget MCP parameters before handler or chain work", async () => {
+    const setup = makeServer();
+    let executed = false;
+
+    const result = await handlePaidMcpToolCall(
+      setup.server,
+      {
+        audience: MCP_AUDIENCE,
+        name: "download",
+        resource: { url: "mcp://tool/download" },
+        amount: "100",
+        scheme: "exact",
+      },
+      {
+        name: "download",
+        arguments: "x".repeat(
+          KASPA_X402_RESOURCE_BUDGET.maxStringBytes + 1,
+        ),
+      },
+      async () => {
+        executed = true;
+        return { result: { content: [] } };
+      },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toBe("invalid_payload");
+    expect(executed).toBe(false);
+    expect(setup.chain.daaLookupCount).toBe(0);
+    expect(setup.chain.utxoLookupCount).toBe(0);
+    expect(setup.chain.lineageDiscoveryCount).toBe(0);
+  });
+
+  it("requires explicit batch MCP error-charge terms before issuing a challenge", async () => {
+    const setup = makeServer({ amount: "100" });
+    const result = await handlePaidMcpToolCall(
+      setup.server,
+      {
+        audience: MCP_AUDIENCE,
+        name: "download",
+        resource: { url: "mcp://tool/download" },
+        amount: "100",
+        scheme: "batch-settlement",
+      },
+      { name: "download", arguments: { id: "alpha" } },
+      async () => ({ result: { content: [] } }),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toContain("explicit payer-approved");
+    expect(readMcpPaymentRequired(result)).toBeUndefined();
+  });
+
+  it("rejects a mismatched batch MCP error charge without issuing a challenge", async () => {
+    const setup = makeServer({ amount: "100" });
+    const result = await handlePaidMcpToolCall(
+      setup.server,
+      {
+        audience: MCP_AUDIENCE,
+        name: "download",
+        resource: { url: "mcp://tool/download" },
+        amount: "100",
+        scheme: "batch-settlement",
+        mcpErrorChargeSompi: "99",
+      },
+      { name: "download", arguments: { id: "alpha" } },
+      async () => ({ result: { content: [] } }),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toContain("invalid batch MCP");
+    expect(readMcpPaymentRequired(result)).toBeUndefined();
+  });
+
+  it("charges an approved batch MCP error once and rejects capture under other arguments", async () => {
+    const setup = makeServer({ amount: "100" });
+    const resource = { url: "mcp://tool/download" };
+    const required = setup.server.buildPaymentRequired({
+      resource,
+      amount: "100",
+      scheme: "batch-settlement",
+      mcpErrorChargeSompi: "100",
+    });
+    const accepted = required.accepts[0] as BatchPaymentRequirements;
+    const originalArguments = { id: "approved" };
+    const requestFingerprint = mcpToolCallFingerprint({
+      audience: MCP_AUDIENCE,
+      toolName: "download",
+      arguments: originalArguments,
+      accepted,
+      resource,
+    });
+    const payment = makeDepositPayment(setup, { accepted });
+    if (payment.payload.payload.type !== "deposit-voucher") {
+      throw new Error("expected deposit voucher");
+    }
+    payment.payload.payload.presentation = signBatchPresentation({
+      accepted,
+      channelId: payment.channelId,
+      covenantId: payment.payload.payload.voucher.covenantId,
+      voucher: payment.payload.payload.voucher,
+      requestFingerprint,
+      paymentIdentifier: null,
+    });
+    const paidParams = {
+      name: "download",
+      arguments: originalArguments,
+      _meta: { [MCP_PAYMENT_META_KEY]: payment.payload },
+    };
+    let executions = 0;
+    const handler = async () => {
+      executions += 1;
+      return {
+        result: {
+          isError: true,
+          content: [{ type: "text" as const, text: "chargeable error" }],
+        },
+      };
+    };
+    const options = {
+      audience: MCP_AUDIENCE,
+      name: "download",
+      resource,
+      amount: "100" as const,
+      scheme: "batch-settlement" as const,
+      mcpErrorChargeSompi: "100" as const,
+    };
+
+    const first = await handlePaidMcpToolCall(
+      setup.server,
+      options,
+      paidParams,
+      handler,
+    );
+    const retry = await handlePaidMcpToolCall(
+      setup.server,
+      options,
+      paidParams,
+      handler,
+    );
+    const captured = await handlePaidMcpToolCall(
+      setup.server,
+      options,
+      { ...paidParams, arguments: { id: "attacker-selected" } },
+      handler,
+    );
+
+    expect(readMcpPaymentResponse(first)).toMatchObject({
+      success: true,
+      amount: "100",
+    });
+    expect(readMcpPaymentResponse(retry)).toEqual(
+      readMcpPaymentResponse(first),
+    );
+    expect(captured.isError).toBe(true);
+    expect(readMcpPaymentResponse(captured)).toBeUndefined();
+    expect(executions).toBe(1);
+    await expect(
+      setup.store.loadChannel(payment.channelId),
+    ).resolves.toMatchObject({
+      chargedCumulativeAmount: "100",
+      signedMaxClaimable: "100",
+    });
   });
 
   it("includes reusable KIP-10 head terms without consuming state in unpaid MCP exact challenges", async () => {
@@ -591,7 +931,14 @@ describe("direct-mode server", () => {
   });
 
   it("rejects explicit additive heads below the configured threshold", () => {
-    const setup = makeServer({ exactProfile: "additive" });
+    const setup = makeServer({
+      exactProfile: "additive",
+      exactSettlementReconciler: {
+        reconcileExactSettlement(attempt) {
+          return { status: "unknown", transactionId: attempt.transactionId };
+        },
+      },
+    });
     const head = exactHead({
       redeemScript: buildKip10AdditiveRedeemScript({
         ownerPublicKey: "aa".repeat(32),
@@ -656,6 +1003,7 @@ describe("direct-mode server", () => {
       toolName: "download",
       arguments: { id: "same" },
       accepted: required.accepts[0] as ExactPaymentRequirements,
+      resource: required.resource,
     });
     const payment = makeExactPayment(setup, { requestHash });
     let executions = 0;
@@ -701,6 +1049,74 @@ describe("direct-mode server", () => {
     expect(executions).toBe(1);
   });
 
+  it("never returns an MCP cached result across trusted principals", async () => {
+    const setup = makeServer({ amount: "100" });
+    const principalA = { principal: "mcp-user-a" };
+    const principalB = { principal: "mcp-user-b" };
+    const resource = { url: "mcp://tool/download" };
+    const required = setup.server.buildPaymentRequired({
+      resource,
+      amount: "100",
+      scheme: "exact",
+      trustedSecurityContext: principalA,
+    });
+    const requestHash = mcpToolCallFingerprint({
+      audience: MCP_AUDIENCE,
+      toolName: "download",
+      arguments: { id: "context-bound" },
+      accepted: required.accepts[0] as ExactPaymentRequirements,
+      resource,
+      trustedSecurityContext: principalA,
+    });
+    const payment = makeExactPayment(setup, {
+      requestHash: bindRequestHashToTrustedContext(requestHash, principalA),
+    });
+    const params = {
+      name: "download",
+      arguments: { id: "context-bound" },
+      _meta: { [MCP_PAYMENT_META_KEY]: payment },
+    };
+    let executions = 0;
+
+    const first = await handlePaidMcpToolCall(
+      setup.server,
+      {
+        audience: MCP_AUDIENCE,
+        name: "download",
+        resource,
+        amount: "100",
+        scheme: "exact",
+        trustedSecurityContext: principalA,
+      },
+      params,
+      async () => {
+        executions += 1;
+        return { result: { content: [{ type: "text", text: "secret-a" }] } };
+      },
+    );
+    const crossPrincipal = await handlePaidMcpToolCall(
+      setup.server,
+      {
+        audience: MCP_AUDIENCE,
+        name: "download",
+        resource,
+        amount: "100",
+        scheme: "exact",
+        trustedSecurityContext: principalB,
+      },
+      params,
+      async () => {
+        executions += 1;
+        return { result: { content: [{ type: "text", text: "wrong" }] } };
+      },
+    );
+
+    expect(first.content?.[0]?.text).toBe("secret-a");
+    expect(crossPrincipal.isError).toBe(true);
+    expect(crossPrincipal.content?.[0]?.text).not.toContain("secret-a");
+    expect(executions).toBe(1);
+  });
+
   it("rejects one exact MCP authorization at another server audience", async () => {
     const serverA = makeServer({ amount: "100" });
     const serverB = makeServer({ amount: "100" });
@@ -716,6 +1132,7 @@ describe("direct-mode server", () => {
       toolName: "download",
       arguments: { id: "cross-server" },
       accepted: required.accepts[0] as ExactPaymentRequirements,
+      resource: required.resource,
     });
     const payment = makeExactPayment(serverA, { requestHash });
     const params = {
@@ -764,6 +1181,76 @@ describe("direct-mode server", () => {
     expect(executionsB).toBe(0);
   });
 
+  it("rejects one exact MCP authorization at another custom resource", async () => {
+    const setup = makeServer({ amount: "100" });
+    const resourceA = {
+      url: "mcp://custom/download",
+      tenantResource: "tenant-a",
+    };
+    const resourceB = {
+      url: "mcp://custom/download",
+      tenantResource: "tenant-b",
+    };
+    const required = setup.server.buildPaymentRequired({
+      resource: resourceA,
+      amount: "100",
+      scheme: "exact",
+    });
+    const requestHash = mcpToolCallFingerprint({
+      audience: MCP_AUDIENCE,
+      toolName: "download",
+      arguments: { id: "same" },
+      accepted: required.accepts[0] as ExactPaymentRequirements,
+      resource: resourceA,
+    });
+    const payment = makeExactPayment(setup, { requestHash });
+    const params = {
+      name: "download",
+      arguments: { id: "same" },
+      _meta: { [MCP_PAYMENT_META_KEY]: payment },
+    };
+    let executions = 0;
+
+    const accepted = await handlePaidMcpToolCall(
+      setup.server,
+      {
+        audience: MCP_AUDIENCE,
+        name: "download",
+        resource: resourceA,
+        amount: "100",
+        scheme: "exact",
+      },
+      params,
+      async () => {
+        executions += 1;
+        return { result: { content: [{ type: "text", text: "paid A" }] } };
+      },
+    );
+    const substituted = await handlePaidMcpToolCall(
+      setup.server,
+      {
+        audience: MCP_AUDIENCE,
+        name: "download",
+        resource: resourceB,
+        amount: "100",
+        scheme: "exact",
+      },
+      params,
+      async () => {
+        executions += 1;
+        return { result: { content: [{ type: "text", text: "wrong" }] } };
+      },
+    );
+
+    expect(accepted.content?.[0]?.text).toBe("paid A");
+    expect(substituted.isError).toBe(true);
+    expect(readMcpPaymentRequired(substituted)).toBeUndefined();
+    expect(substituted.content?.[0]?.text).toContain(
+      "invalid_transaction_state",
+    );
+    expect(executions).toBe(1);
+  });
+
   it("returns a fresh MCP challenge when payer authorization targets another call", async () => {
     const setup = makeServer({ amount: "100" });
     const firstRequired = setup.server.buildPaymentRequired({
@@ -776,6 +1263,7 @@ describe("direct-mode server", () => {
       toolName: "download",
       arguments: { id: "first" },
       accepted: firstRequired.accepts[0] as ExactPaymentRequirements,
+      resource: firstRequired.resource,
     });
     const payment = makeExactPayment(setup, { requestHash: firstHash });
 
@@ -815,8 +1303,8 @@ describe("direct-mode server", () => {
     );
 
     expect(replay.isError).toBe(true);
-    expect(readMcpPaymentRequired(replay)).toBeDefined();
-    expect(replay.content?.[0]?.text).toContain("invalid_payload");
+    expect(readMcpPaymentRequired(replay)).toBeUndefined();
+    expect(replay.content?.[0]?.text).toContain("invalid_transaction_state");
   });
 
   it("returns hybrid MCP settlement failures without exposing paid tool output", async () => {
@@ -831,6 +1319,7 @@ describe("direct-mode server", () => {
       toolName: "download",
       arguments: { id: "fail" },
       accepted: required.accepts[0] as ExactPaymentRequirements,
+      resource: required.resource,
     });
     const payment = makeExactPayment(setup, { requestHash });
     const settlement: SettlementResponse = {
@@ -906,6 +1395,42 @@ describe("direct-mode server", () => {
     expect(stored?.amount).toBe("100");
     expect(stored?.paymentOutputIndex).toBe(0);
     expect(stored?.response.status).toBe(200);
+  });
+
+  it("requires a payment identifier for every exact attempt", async () => {
+    let verifierCalls = 0;
+    const setup = makeServer({
+      exactTransactionVerifier: {
+        verifyExactPayment(request) {
+          verifierCalls += 1;
+          return {
+            transactionId: EXACT_TX_ID,
+            paymentOutput: {
+              amount: request.amount,
+              scriptPublicKey: request.payToScriptPublicKey,
+            },
+            finality: "accepted",
+            requestAuthorization: fakeAuthorizationEvidence(
+              request.authorization,
+            ),
+          };
+        },
+      },
+    });
+    const payment = makeExactPayment(setup, { paymentIdentifier: null });
+    let executed = false;
+
+    const response = await setup.server.handlePaidRequest(
+      requestWithPayment(payment, { paymentScheme: "exact" }),
+      async () => {
+        executed = true;
+        return { body: "wrong" };
+      },
+    );
+
+    expect(response.status).toBe(402);
+    expect(verifierCalls).toBe(0);
+    expect(executed).toBe(false);
   });
 
   it("verifies and settles standard-native exact before protected work without head state", async () => {
@@ -1070,6 +1595,40 @@ describe("direct-mode server", () => {
     expect(executed).toBe(false);
   });
 
+  it("never returns an exact cached response across trusted principals", async () => {
+    const setup = makeServer();
+    const principalA = {
+      principal: "user:a",
+      tenant: "tenant:one",
+      authorizationScopes: ["download"],
+    } satisfies TrustedSecurityContext;
+    const principalB = { ...principalA, principal: "user:b" };
+    const accepted = makeExactPayment(setup)
+      .accepted as ExactPaymentRequirements;
+    const requestHash = bindRequestHashToTrustedContext(
+      testRequestFingerprint(accepted),
+      principalA,
+    );
+    const payment = makeExactPayment(setup, { requestHash });
+    const first = await setup.server.handlePaidRequest(
+      requestWithPayment(payment, { trustedSecurityContext: principalA }),
+      async () => ({ body: "principal A secret" }),
+    );
+    let executed = false;
+    const crossPrincipal = await setup.server.handlePaidRequest(
+      requestWithPayment(payment, { trustedSecurityContext: principalB }),
+      async () => {
+        executed = true;
+        return { body: "wrong" };
+      },
+    );
+
+    expect(first.status).toBe(200);
+    expect(crossPrincipal.status).toBe(409);
+    expect(crossPrincipal.body).not.toBe("principal A secret");
+    expect(executed).toBe(false);
+  });
+
   it("resumes a durable handler result without re-running protected work after an exact commit failure", async () => {
     const store = new FailingExactCommitStore(1);
     const setup = makeServer({ requirePaymentIdentifier: true, store });
@@ -1116,8 +1675,12 @@ describe("direct-mode server", () => {
     ).resolves.toMatchObject({
       status: "applied",
       handlerStartedAt: expect.any(String),
-      handlerCompletedAt: expect.any(String),
-      handlerResult: { body: "download" },
+    });
+    await expect(
+      store.loadExactSettlementAttempt(EXACT_TX_ID),
+    ).resolves.not.toHaveProperty("handlerResult");
+    await expect(store.loadExactPayment(EXACT_TX_ID)).resolves.toMatchObject({
+      response: { body: "download" },
     });
   });
 
@@ -1165,6 +1728,63 @@ describe("direct-mode server", () => {
     expect(handlerInvocations).toBe(1);
   });
 
+  it("enforces exact per-payer quotas by authenticated signer public key", async () => {
+    const store = new MemoryServerChannelStore([], {
+      limits: {
+        maxRecords: 10,
+        maxBytes: 8 * 1024 * 1024,
+        maxRecordsPerPayer: 1,
+      },
+    });
+    const setup = makeServer({
+      store,
+      exactTransactionVerifier: {
+        verifyExactPayment(request) {
+          return {
+            transactionId: request.transaction,
+            paymentOutput: {
+              amount: request.amount,
+              scriptPublicKey: request.payToScriptPublicKey,
+            },
+            finality: "accepted",
+            requestAuthorization: fakeAuthorizationEvidence(
+              request.authorization,
+            ),
+          };
+        },
+      },
+    });
+    const firstPayment = makeExactPayment(setup, {
+      transactionId: "a1".repeat(32),
+    });
+    const secondPayment = makeExactPayment(setup, {
+      transactionId: "a2".repeat(32),
+    });
+    let executions = 0;
+
+    const first = await setup.server.handlePaidRequest(
+      requestWithPayment(firstPayment),
+      async () => {
+        executions += 1;
+        return { body: "first" };
+      },
+    );
+    const second = await setup.server.handlePaidRequest(
+      requestWithPayment(secondPayment),
+      async () => {
+        executions += 1;
+        return { body: "must not run" };
+      },
+    );
+
+    expect(first.status).toBe(200);
+    expect(second.status).not.toBe(200);
+    expect(executions).toBe(1);
+    expect(store.durableStateStats().payerRecords).toEqual({
+      [CLIENT_KEY]: 1,
+    });
+  });
+
   it("rejects an exact authorization replayed against a different request", async () => {
     const setup = makeServer();
     const payment = makeExactPayment(setup, { requestHash: "12".repeat(32) });
@@ -1190,8 +1810,8 @@ describe("direct-mode server", () => {
       },
     );
 
-    expect(replay.status).toBe(402);
-    expect(replay.body).toEqual({ error: "invalid_payload" });
+    expect(replay.status).toBe(409);
+    expect(replay.body).toEqual({ error: "invalid_transaction_state" });
     expect(executed).toBe(false);
   });
 
@@ -1386,6 +2006,8 @@ describe("direct-mode server", () => {
         canonicalLockRequested = resolve;
       });
       const lockManager = {
+        coordinationScope: memoryLockManager.coordinationScope,
+        coordinationDomain: memoryLockManager.coordinationDomain,
         runExclusive<T>(key: Hash32Hex, fn: () => Promise<T>): Promise<T> {
           if (key === canonicalLockKey) canonicalLockRequested();
           return memoryLockManager.runExclusive(key, fn);
@@ -2002,6 +2624,49 @@ describe("direct-mode server", () => {
       ...makeAdditivePayment(accepted, { requestHash }),
       ...paymentIdentifierExtension(paymentIdentifier),
     };
+    if (payment.payload.type !== "exact-transaction") {
+      throw new Error("expected exact payment");
+    }
+    const transactionArtifact = {
+      id: EXACT_TX_ID,
+      version: 1,
+      inputs: [
+        {
+          previousOutpoint: { transactionId: "71".repeat(32), index: 0 },
+          sequence: "0",
+          sigOpCount: 0,
+          computeBudget: 0,
+          signatureScript: "00",
+          utxo: { amount: "100", scriptPublicKey: "000000" },
+        },
+        {
+          previousOutpoint: { transactionId: "72".repeat(32), index: 1 },
+          sequence: "0",
+          sigOpCount: 0,
+          computeBudget: 10,
+          signatureScript: "00",
+          utxo: { amount: "100", scriptPublicKey: "000000" },
+        },
+      ],
+      outputs: [{ value: "100", scriptPublicKey: "000000", covenant: null }],
+      lockTime: "0",
+      subnetworkId: "00".repeat(20),
+      gas: "0",
+      payload: "",
+      storageMass: "0",
+    };
+    payment.payload.transaction = JSON.stringify(transactionArtifact);
+    const representationVariant = structuredClone(payment);
+    if (representationVariant.payload.type !== "exact-transaction") {
+      throw new Error("expected exact payment");
+    }
+    representationVariant.payload.transaction = JSON.stringify(
+      { ignored: true, ...transactionArtifact },
+      null,
+      2,
+    );
+    representationVariant.payload.payerAddress =
+      "kaspatest:receipt-only-variant";
     let executions = 0;
 
     const first = await setup.server.handlePaidRequest(
@@ -2012,7 +2677,10 @@ describe("direct-mode server", () => {
       },
     );
     const second = await setup.server.handlePaidRequest(
-      requestWithPayment(payment, { paymentScheme: "exact", requestHash }),
+      requestWithPayment(representationVariant, {
+        paymentScheme: "exact",
+        requestHash,
+      }),
       async () => {
         executions += 1;
         return { body: "wrong" };
@@ -2023,7 +2691,9 @@ describe("direct-mode server", () => {
     expect(second.status).toBe(200);
     expect(second.body).toBe("cached");
     expect(executions).toBe(1);
-    expect(setup.chain.sentTransactions).toEqual([EXACT_TRANSACTION_ARTIFACT]);
+    expect(setup.chain.sentTransactions).toEqual([
+      JSON.stringify(transactionArtifact),
+    ]);
   });
 
   it("returns cached accepted exact replays after challenge expiry", async () => {
@@ -2065,6 +2735,134 @@ describe("direct-mode server", () => {
       expect(second.body).toBe("cached");
       expect(executions).toBe(1);
       expect(setup.chain.sentTransactions).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumes one immutable accepted exact attempt after expiry without rebroadcast", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    try {
+      const setup = makeServer({
+        maxTimeoutSeconds: 1,
+        exactTransactionVerifier: {
+          verifyExactPayment(request) {
+            return {
+              transactionId: EXACT_TX_ID,
+              paymentOutput: {
+                amount: request.amount,
+                scriptPublicKey: request.payToScriptPublicKey,
+              },
+              requestAuthorization: fakeAuthorizationEvidence(
+                request.authorization,
+              ),
+            };
+          },
+        },
+      });
+      setup.chain.sendTransactionId = EXACT_TX_ID;
+      const requestHash = "bd".repeat(32);
+      const payment = makeExactPayment(setup, { requestHash });
+      const request = requestWithPayment(payment, {
+        paymentScheme: "exact",
+        requestHash,
+      });
+      let handlerCalls = 0;
+
+      const first = await setup.server.handlePaidRequest(request, async () => {
+        handlerCalls += 1;
+        throw new Error("response lost after protected effect");
+      });
+      expect(first.status).toBe(500);
+      expect(setup.chain.sentTransactions).toEqual([
+        EXACT_TRANSACTION_ARTIFACT,
+      ]);
+      await expect(
+        setup.store.loadExactSettlementAttempt(EXACT_TX_ID),
+      ).resolves.toMatchObject({ status: "accepted" });
+      await setup.server.recoverExactHandler(EXACT_TX_ID, {
+        body: "recovered",
+        chargedAmount: "100",
+      });
+      vi.setSystemTime(new Date("2026-01-01T00:00:02.000Z"));
+
+      const recovered = await setup.server.handlePaidRequest(
+        request,
+        async () => {
+          handlerCalls += 1;
+          return { body: "must not run" };
+        },
+      );
+
+      expect(recovered).toMatchObject({ status: 200, body: "recovered" });
+      expect(handlerCalls).toBe(1);
+      expect(setup.chain.sentTransactions).toEqual([
+        EXACT_TRANSACTION_ARTIFACT,
+      ]);
+      await expect(
+        setup.store.loadExactSettlementAttempt(EXACT_TX_ID),
+      ).resolves.toMatchObject({ status: "applied" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects changed exact bindings through the expiry recovery exception", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    try {
+      const setup = makeServer({
+        maxTimeoutSeconds: 1,
+        exactTransactionVerifier: {
+          verifyExactPayment(request) {
+            return {
+              transactionId: EXACT_TX_ID,
+              paymentOutput: {
+                amount: request.amount,
+                scriptPublicKey: request.payToScriptPublicKey,
+              },
+              finality: "accepted",
+              requestAuthorization: fakeAuthorizationEvidence(
+                request.authorization,
+              ),
+            };
+          },
+        },
+      });
+      const requestHash = "be".repeat(32);
+      const payment = makeExactPayment(setup, { requestHash });
+      const request = requestWithPayment(payment, {
+        paymentScheme: "exact",
+        requestHash,
+      });
+      await setup.server.handlePaidRequest(request, async () => {
+        throw new Error("leave accepted attempt for recovery");
+      });
+      const changed = structuredClone(payment);
+      Object.assign(
+        changed,
+        paymentIdentifierExtension("changed_exact_identifier_0001"),
+      );
+      vi.setSystemTime(new Date("2026-01-01T00:00:02.000Z"));
+      let executed = false;
+
+      const rejected = await setup.server.handlePaidRequest(
+        requestWithPayment(changed, {
+          paymentScheme: "exact",
+          requestHash,
+        }),
+        async () => {
+          executed = true;
+          return { body: "wrong" };
+        },
+      );
+
+      expect(rejected.status).toBe(402);
+      expect(executed).toBe(false);
+      await expect(
+        setup.store.loadExactSettlementAttempt(EXACT_TX_ID),
+      ).resolves.toMatchObject({ status: "accepted" });
     } finally {
       vi.useRealTimers();
     }
@@ -2363,7 +3161,7 @@ describe("direct-mode server", () => {
     expect(calls).toBe(0);
   });
 
-  it("returns a controlled 402 when request fingerprinting needs an explicit hash", async () => {
+  it("returns a controlled 400 for a non-JSON direct request body", async () => {
     const setup = makeServer();
     const payment = makeExactPayment(setup);
 
@@ -2375,8 +3173,8 @@ describe("direct-mode server", () => {
       async () => ({ body: "wrong" }),
     );
 
-    expect(response.status).toBe(402);
-    expect(response.headers[PAYMENT_REQUIRED_HEADER]).toBeTruthy();
+    expect(response.status).toBe(400);
+    expect(response.headers[PAYMENT_REQUIRED_HEADER]).toBeUndefined();
   });
 
   it("accepts an initial deposit-voucher and commits channel state after handler success", async () => {
@@ -2387,7 +3185,7 @@ describe("direct-mode server", () => {
       requestWithPayment(payment.payload),
       async () => ({
         body: "secret",
-        chargedAmount: "70",
+        chargedAmount: "100",
       }),
     );
 
@@ -2395,15 +3193,358 @@ describe("direct-mode server", () => {
     expect(response.body).toBe("secret");
     expect(response.headers[PAYMENT_RESPONSE_HEADER]).toBeTruthy();
     const stored = await setup.store.loadChannel(payment.channelId);
-    expect(stored?.chargedCumulativeAmount).toBe("70");
+    expect(stored?.chargedCumulativeAmount).toBe("100");
     expect(stored?.signedMaxClaimable).toBe("100");
     expect(stored?.lastCommitmentId).toMatch(/^[0-9a-f]{64}$/);
     const commitment = await setup.store.loadCommitment(
       stored!.lastCommitmentId!,
     );
-    expect(commitment?.chargedAmount).toBe("70");
-    expect(commitment?.chargedCumulativeAfter).toBe("70");
+    expect(commitment?.chargedAmount).toBe("100");
+    expect(commitment?.chargedCumulativeAfter).toBe("100");
     expect(commitment?.response.status).toBe(200);
+  });
+
+  it("rejects a salted channel alias for an already registered covenant", async () => {
+    const setup = makeServer();
+    const first = makeDepositPayment(setup, { salt: "31".repeat(32) });
+    const alias = makeDepositPayment(setup, { salt: "32".repeat(32) });
+    let handlerCalls = 0;
+    const handler = async () => {
+      handlerCalls += 1;
+      return { body: "secret", chargedAmount: "100" };
+    };
+
+    const accepted = await setup.server.handlePaidRequest(
+      requestWithPayment(first.payload),
+      handler,
+    );
+    const rejected = await setup.server.handlePaidRequest(
+      requestWithPayment(alias.payload),
+      handler,
+    );
+
+    expect(first.channelId).not.toBe(alias.channelId);
+    expect(accepted.status).toBe(200);
+    expect(rejected.status).toBe(503);
+    expect(handlerCalls).toBe(1);
+    await expect(
+      setup.store.loadChannel(first.channelId),
+    ).resolves.toBeDefined();
+    await expect(
+      setup.store.loadChannel(alias.channelId),
+    ).resolves.toBeUndefined();
+  });
+
+  it("allows only one concurrent salted alias to register a covenant", async () => {
+    const setup = makeServer();
+    const first = makeDepositPayment(setup, { salt: "33".repeat(32) });
+    const alias = makeDepositPayment(setup, { salt: "34".repeat(32) });
+    let handlerCalls = 0;
+    const handler = async () => {
+      handlerCalls += 1;
+      return { body: "secret", chargedAmount: "100" };
+    };
+
+    const responses = await Promise.all([
+      setup.server.handlePaidRequest(
+        requestWithPayment(first.payload),
+        handler,
+      ),
+      setup.server.handlePaidRequest(
+        requestWithPayment(alias.payload),
+        handler,
+      ),
+    ]);
+
+    expect(responses.map((response) => response.status).sort()).toEqual([
+      200, 503,
+    ]);
+    expect(handlerCalls).toBe(1);
+    const channels = await setup.store.listChannels();
+    expect(channels).toHaveLength(1);
+    expect([first.channelId, alias.channelId]).toContain(
+      channels[0]?.channelId,
+    );
+  });
+
+  it("runs one protected effect across two server instances sharing one store", async () => {
+    const store = new MemoryServerChannelStore();
+    const lockManager = new MemoryChannelLockManager();
+    const first = makeServer({ store, lockManager });
+    const second = makeServer({ store, lockManager });
+    const payment = makeDepositPayment(first);
+    const deposit = payment.payload.payload;
+    if (deposit.type !== "deposit-voucher")
+      throw new Error("expected deposit voucher");
+    second.chain.setUtxo({
+      outpoint: deposit.fundingOutpoint,
+      amount: deposit.fundingAmountSompi,
+      scriptPublicKey: deposit.activeScriptPublicKey,
+      finality: "accepted",
+    });
+    let handlerCalls = 0;
+    const handler = async () => {
+      handlerCalls += 1;
+      return { body: "shared", chargedAmount: "100" };
+    };
+
+    const responses = await Promise.all([
+      first.server.handlePaidRequest(
+        requestWithPayment(payment.payload),
+        handler,
+      ),
+      second.server.handlePaidRequest(
+        requestWithPayment(payment.payload),
+        handler,
+      ),
+    ]);
+
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(responses.map((response) => response.body)).toEqual([
+      "shared",
+      "shared",
+    ]);
+    expect(handlerCalls).toBe(1);
+  });
+
+  it("lets a top-up settlement lease defeat a concurrent claim across two instances", async () => {
+    const store = new OperationGateStore();
+    const lockManager = deploymentNoopLock(store.coordinationDomain);
+    const initial = makeServer({ store, lockManager });
+    const deposit = makeDepositPayment(initial);
+    await initial.server.handlePaidRequest(
+      requestWithPayment(deposit.payload),
+      async () => ({ chargedAmount: "100" }),
+    );
+    let claimBuilds = 0;
+    const claimSetup = makeServer({
+      store,
+      lockManager,
+      claimBuilder: {
+        async buildClaimTransaction({ channel, claimAmount }) {
+          claimBuilds += 1;
+          return fixedClaim(channel, claimAmount);
+        },
+      },
+    });
+    const topUpSetup = makeServer({
+      store,
+      lockManager,
+      topUpVerifier: {
+        verifyTopUp({ previous, next }) {
+          return acceptedTopUp(previous, next);
+        },
+      },
+    });
+    const topUp = makeDepositPayment(topUpSetup, {
+      fundingTx: TOP_UP_TX,
+      fundingAmount: "1200",
+      voucherAmount: "200",
+    });
+    let handlerCalls = 0;
+    store.arm("after-batch-claim");
+
+    const settlement = topUpSetup.server.handlePaidRequest(
+      requestWithPayment(topUp.payload, { requestHash: "ba".repeat(32) }),
+      async () => {
+        handlerCalls += 1;
+        return { body: "topped", chargedAmount: "100" };
+      },
+    );
+    await store.waitUntilBlocked();
+    await expect(
+      claimSetup.server.executeClaim(deposit.channelId),
+    ).rejects.toThrow("conflicting durable operation");
+    expect(claimBuilds).toBe(0);
+    expect(claimSetup.chain.sendCount).toBe(0);
+
+    store.release();
+    await expect(settlement).resolves.toMatchObject({
+      status: 200,
+      body: "topped",
+    });
+    expect(handlerCalls).toBe(1);
+    await expect(store.loadChannel(deposit.channelId)).resolves.toMatchObject({
+      activeOutpoint: { txid: TOP_UP_TX, index: 0 },
+      fundingAmount: "1200",
+      chargedCumulativeAmount: "200",
+    });
+  });
+
+  it("lets a claim lease defeat a concurrent settlement across two instances", async () => {
+    const store = new OperationGateStore();
+    const lockManager = deploymentNoopLock(store.coordinationDomain);
+    const initial = makeServer({ store, lockManager });
+    const deposit = makeDepositPayment(initial);
+    await initial.server.handlePaidRequest(
+      requestWithPayment(deposit.payload),
+      async () => ({ chargedAmount: "100" }),
+    );
+    const channel = await requireChannel(store, deposit.channelId);
+    let claimBuilds = 0;
+    const claimSetup = makeServer({
+      store,
+      lockManager,
+      claimBuilder: {
+        async buildClaimTransaction({ channel: claimed, claimAmount }) {
+          claimBuilds += 1;
+          return fixedClaim(claimed, claimAmount);
+        },
+      },
+    });
+    const claim = fixedClaim(channel, "100");
+    claimSetup.chain.setUtxo({
+      outpoint: claim.continuationOutpoint,
+      amount: claim.continuationFundingAmount,
+      scriptPublicKey: claim.continuationScriptPublicKey,
+      finality: "confirmed",
+    });
+    const settlementSetup = makeServer({ store, lockManager });
+    settlementSetup.chain.setUtxo({
+      outpoint: channel.activeOutpoint,
+      amount: channel.fundingAmount,
+      scriptPublicKey: channel.activeScriptPublicKey,
+      finality: "confirmed",
+    });
+    const voucher = makeVoucherPayment(settlementSetup, channel);
+    let handlerCalls = 0;
+    store.arm("after-channel-claim");
+
+    const pendingClaim = claimSetup.server.executeClaim(deposit.channelId);
+    await store.waitUntilBlocked();
+    const settlement = await settlementSetup.server.handlePaidRequest(
+      requestWithPayment(voucher, { requestHash: "cb".repeat(32) }),
+      async () => {
+        handlerCalls += 1;
+        return { chargedAmount: "100" };
+      },
+    );
+
+    expect(settlement.status).toBe(503);
+    expect(handlerCalls).toBe(0);
+    expect(settlementSetup.chain.sendCount).toBe(0);
+    store.release();
+    await expect(pendingClaim).resolves.toMatchObject({ accepted: true });
+    expect(claimBuilds).toBe(1);
+    expect(claimSetup.chain.sendCount).toBe(1);
+  });
+
+  it.each(["deposit", "top-up"] as const)(
+    "rejects a stale %s transition after a newer settlement across two instances",
+    async (kind) => {
+      const store = new OperationGateStore();
+      const lockManager = deploymentNoopLock(store.coordinationDomain);
+      const initial = makeServer({ store, lockManager });
+      const deposit = makeDepositPayment(initial);
+      await initial.server.handlePaidRequest(
+        requestWithPayment(deposit.payload),
+        async () => ({ chargedAmount: "100" }),
+      );
+      const before = await requireChannel(store, deposit.channelId);
+      const staleSetup = makeServer({
+        store,
+        lockManager,
+        topUpVerifier: {
+          verifyTopUp({ previous, next }) {
+            return acceptedTopUp(previous, next);
+          },
+        },
+      });
+      const newerSetup = makeServer({ store, lockManager });
+      newerSetup.chain.setUtxo({
+        outpoint: before.activeOutpoint,
+        amount: before.fundingAmount,
+        scriptPublicKey: before.activeScriptPublicKey,
+        finality: "confirmed",
+      });
+      const stale = makeDepositPayment(staleSetup, {
+        ...(kind === "top-up"
+          ? { fundingTx: TOP_UP_TX, fundingAmount: "1200" }
+          : {}),
+        voucherAmount: "200",
+      });
+      const newer = makeVoucherPayment(newerSetup, before);
+      let staleHandlers = 0;
+      let newerHandlers = 0;
+      store.arm("before-batch-claim");
+
+      const staleResponse = staleSetup.server.handlePaidRequest(
+        requestWithPayment(stale.payload, { requestHash: "da".repeat(32) }),
+        async () => {
+          staleHandlers += 1;
+          return { chargedAmount: "100" };
+        },
+      );
+      await store.waitUntilBlocked();
+      const newerResponse = await newerSetup.server.handlePaidRequest(
+        requestWithPayment(newer, { requestHash: "db".repeat(32) }),
+        async () => {
+          newerHandlers += 1;
+          return { body: "newer", chargedAmount: "100" };
+        },
+      );
+      store.release();
+
+      expect(newerResponse).toMatchObject({ status: 200, body: "newer" });
+      await expect(staleResponse).resolves.toMatchObject({ status: 503 });
+      expect(staleHandlers).toBe(0);
+      expect(newerHandlers).toBe(1);
+      await expect(store.loadChannel(deposit.channelId)).resolves.toMatchObject(
+        {
+          activeOutpoint: before.activeOutpoint,
+          fundingAmount: "1000",
+          chargedCumulativeAmount: "200",
+          signedMaxClaimable: "200",
+        },
+      );
+    },
+  );
+
+  it("lets one exact-or-batch request own an identifier across two instances", async () => {
+    const store = new MemoryServerChannelStore();
+    const lockManager = new MemoryChannelLockManager();
+    const exact = makeServer({
+      store,
+      lockManager,
+      requirePaymentIdentifier: true,
+    });
+    const batch = makeServer({
+      store,
+      lockManager,
+      requirePaymentIdentifier: true,
+    });
+    const paymentIdentifier = "pay_7d5d747be160e280504c099d984bcfe0";
+    const exactPayment = makeExactPayment(exact, { paymentIdentifier });
+    const batchPayment = makeDepositPayment(batch, { paymentIdentifier });
+    let handlerCalls = 0;
+    const handler = async () => {
+      handlerCalls += 1;
+      return { body: "winner", chargedAmount: "100" };
+    };
+
+    const responses = await Promise.all([
+      exact.server.handlePaidRequest(requestWithPayment(exactPayment), handler),
+      batch.server.handlePaidRequest(
+        requestWithPayment(batchPayment.payload),
+        handler,
+      ),
+    ]);
+
+    expect(responses.map((response) => response.status).sort()).toEqual([
+      200, 409,
+    ]);
+    expect(handlerCalls).toBe(1);
+    await expect(
+      store.loadPaymentIdentifierReservation(paymentIdentifier),
+    ).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("rejects shared-store servers that use independent local locks", () => {
+    const store = new MemoryServerChannelStore();
+    makeServer({ store });
+    expect(() => makeServer({ store })).toThrow(
+      "shared store cannot be used by multiple server instances",
+    );
   });
 
   it("accepts a voucher-only retry on an existing channel", async () => {
@@ -2418,18 +3559,19 @@ describe("direct-mode server", () => {
 
     const response = await setup.server.handlePaidRequest(
       requestWithPayment(voucher),
-      async () => ({ body: "next", chargedAmount: "80" }),
+      async () => ({ body: "next", chargedAmount: "100" }),
     );
 
     expect(response.status).toBe(200);
     expect(response.body).toBe("next");
     const stored = await requireChannel(setup.store, deposit.channelId);
-    expect(stored.chargedCumulativeAmount).toBe("180");
+    expect(stored.chargedCumulativeAmount).toBe("200");
     expect(stored.signedMaxClaimable).toBe("200");
   });
 
   it("accepts a deposit-voucher top-up into a new active outpoint", async () => {
     const setup = makeServer({
+      minDepositSompi: "100",
       topUpVerifier: {
         async verifyTopUp({ previous, next }) {
           if (
@@ -2444,11 +3586,13 @@ describe("direct-mode server", () => {
             successorScriptPublicKey: next.activeScriptPublicKey,
             successorAmount: next.fundingAmount,
             authorizedSuccessorCount: 1,
+            authorizingInput: 0,
+            acceptance: acceptedChainEvidence(next.activeOutpoint.txid),
           };
         },
       },
     });
-    const deposit = makeDepositPayment(setup);
+    const deposit = makeDepositPayment(setup, { fundingAmount: "150" });
     await setup.server.handlePaidRequest(
       requestWithPayment(deposit.payload),
       async () => ({ chargedAmount: "100" }),
@@ -2461,7 +3605,7 @@ describe("direct-mode server", () => {
 
     const response = await setup.server.handlePaidRequest(
       requestWithPayment(topUp.payload),
-      async () => ({ body: "topped", chargedAmount: "80" }),
+      async () => ({ body: "topped", chargedAmount: "100" }),
     );
 
     expect(response.status).toBe(200);
@@ -2469,7 +3613,7 @@ describe("direct-mode server", () => {
     const stored = await requireChannel(setup.store, deposit.channelId);
     expect(stored.activeOutpoint.txid).toBe(TOP_UP_TX);
     expect(stored.fundingAmount).toBe("1200");
-    expect(stored.chargedCumulativeAmount).toBe("180");
+    expect(stored.chargedCumulativeAmount).toBe("200");
     expect(stored.signedMaxClaimable).toBe("200");
   });
 
@@ -2486,6 +3630,8 @@ describe("direct-mode server", () => {
               successorScriptPublicKey: next.activeScriptPublicKey,
               successorAmount: next.fundingAmount,
               authorizedSuccessorCount: 1,
+              authorizingInput: 0,
+              acceptance: acceptedChainEvidence(next.activeOutpoint.txid),
             };
           },
         },
@@ -2531,6 +3677,7 @@ describe("direct-mode server", () => {
       voucherAmount: "150",
     });
     let executed = false;
+    setup.chain.resetReadCounts();
 
     const response = await setup.server.handlePaidRequest(
       requestWithPayment(underpaid),
@@ -2542,6 +3689,15 @@ describe("direct-mode server", () => {
 
     expect(response.status).toBe(402);
     expect(executed).toBe(false);
+    expect(setup.chain.daaLookupCount).toBe(0);
+    expect(setup.chain.utxoLookupCount).toBe(0);
+    expect(setup.chain.lineageDiscoveryCount).toBe(0);
+    const corrective = decodePaymentRequiredHeader(
+      response.headers[PAYMENT_REQUIRED_HEADER],
+    );
+    const accepted = corrective.accepts[0] as BatchPaymentRequirements;
+    expect(accepted.extra.channelState).toBeUndefined();
+    expect(accepted.extra.voucherState).toBeUndefined();
     const stored = await requireChannel(setup.store, deposit.channelId);
     expect(stored.chargedCumulativeAmount).toBe("100");
   });
@@ -2564,6 +3720,213 @@ describe("direct-mode server", () => {
     await expect(
       setup.store.loadChannel(payment.channelId),
     ).resolves.toBeUndefined();
+    expect(setup.chain.daaLookupCount).toBe(0);
+    expect(setup.chain.utxoLookupCount).toBe(0);
+    expect(setup.chain.lineageDiscoveryCount).toBe(0);
+    expect(setup.chain.genesisVerificationCount).toBe(0);
+  });
+
+  it("rejects bad existing-channel voucher signatures before chain reads", async () => {
+    const setup = makeServer();
+    const deposit = makeDepositPayment(setup);
+    await setup.server.handlePaidRequest(
+      requestWithPayment(deposit.payload),
+      async () => ({ chargedAmount: "100" }),
+    );
+    const channel = await requireChannel(setup.store, deposit.channelId);
+    const payment = makeVoucherPayment(setup, channel);
+    if (payment.payload.type !== "voucher")
+      throw new Error("expected voucher payment");
+    payment.payload.voucher.signature = "ff".repeat(64);
+    setup.chain.resetReadCounts();
+
+    const response = await setup.server.handlePaidRequest(
+      requestWithPayment(payment),
+      async () => ({ chargedAmount: "100" }),
+    );
+
+    expect(response.status).toBe(402);
+    expect(setup.chain.daaLookupCount).toBe(0);
+    expect(setup.chain.utxoLookupCount).toBe(0);
+    expect(setup.chain.lineageDiscoveryCount).toBe(0);
+    expect(setup.chain.genesisVerificationCount).toBe(0);
+  });
+
+  it("rejects a captured batch presentation replayed against a different request", async () => {
+    const setup = makeServer();
+    const payment = makeDepositPayment(setup);
+    const request = requestWithPayment(payment.payload, {
+      body: { operation: "first" },
+    });
+    request.body = { operation: "second" };
+    let executed = false;
+
+    const response = await setup.server.handlePaidRequest(request, async () => {
+      executed = true;
+      return { chargedAmount: "100" };
+    });
+
+    expect(response.status).toBe(402);
+    expect(executed).toBe(false);
+    await expect(
+      setup.store.loadChannel(payment.channelId),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects expired batch presentations", async () => {
+    const setup = makeServer();
+    const payment = makeDepositPayment(setup);
+    if (payment.payload.payload.type !== "deposit-voucher") {
+      throw new Error("expected deposit-voucher");
+    }
+    payment.payload.payload.presentation.expiresAt = "2026-01-01T00:00:00.000Z";
+    let executed = false;
+
+    const response = await setup.server.handlePaidRequest(
+      requestWithPayment(payment.payload),
+      async () => {
+        executed = true;
+        return { chargedAmount: "100" };
+      },
+    );
+
+    expect(response.status).toBe(402);
+    expect(executed).toBe(false);
+    await expect(
+      setup.store.loadChannel(payment.channelId),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rechecks batch presentation expiry before starting protected work", async () => {
+    let now = Date.UTC(2030, 0, 1);
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const setup = makeServer();
+      const payment = makeDepositPayment(setup);
+      if (payment.payload.payload.type !== "deposit-voucher") {
+        throw new Error("expected deposit-voucher");
+      }
+      const expiresAt = Date.parse(
+        payment.payload.payload.presentation.expiresAt,
+      );
+      const readDaa = setup.chain.getVirtualDaaScore.bind(setup.chain);
+      vi.spyOn(setup.chain, "getVirtualDaaScore").mockImplementation(async () => {
+        now = expiresAt;
+        return readDaa();
+      });
+      let executions = 0;
+
+      const response = await setup.server.handlePaidRequest(
+        requestWithPayment(payment.payload),
+        async () => {
+          executions += 1;
+          return { body: "must not run", chargedAmount: "100" };
+        },
+      );
+
+      expect(response.status).toBe(402);
+      expect(executions).toBe(0);
+      expect(setup.store.durableStateStats().openRecords).toBe(0);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it(
+    "does not start protected work when a batch expires during handler admission",
+    async () => {
+      let now = Date.UTC(2030, 0, 1);
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        const store = new ExpiringBatchHandlerAdmissionStore();
+        const setup = makeServer({ store });
+        const payment = makeDepositPayment(setup);
+        if (payment.payload.payload.type !== "deposit-voucher") {
+          throw new Error("expected deposit-voucher");
+        }
+        const request = requestWithPayment(payment.payload, {
+          requestHash: "aa".repeat(32),
+        });
+        store.afterHandlerAdmission = () => {
+          now = Date.parse(payment.payload.payload.presentation.expiresAt);
+        };
+        let executions = 0;
+
+        const expired = await setup.server.handlePaidRequest(
+          request,
+          async () => {
+            executions += 1;
+            return { body: "must not run", chargedAmount: "100" };
+          },
+        );
+
+        expect(expired).toMatchObject({
+          status: 503,
+          body: { error: "batch_settlement_recovery_required" },
+        });
+        expect(executions).toBe(0);
+        expect(store.attemptId).toBeDefined();
+        await expect(
+          store.loadBatchSettlementAttempt(store.attemptId!),
+        ).resolves.toMatchObject({
+          handlerStartedAt: expect.any(String),
+          recoveryReason: expect.stringContaining(
+            "expired after durable handler admission",
+          ),
+        });
+
+        await setup.server.recoverBatchHandler(store.attemptId!, {
+          body: "recovered",
+        });
+        const recovered = await setup.server.handlePaidRequest(
+          request,
+          async () => {
+            executions += 1;
+            return { body: "must not rerun", chargedAmount: "100" };
+          },
+        );
+
+        expect(recovered).toMatchObject({ status: 200, body: "recovered" });
+        expect(executions).toBe(0);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
+  it("rejects bad batch presentation signatures", async () => {
+    const setup = makeServer();
+    const payment = makeDepositPayment(setup);
+    const request = requestWithPayment(payment.payload);
+    const encoded = request.headers[PAYMENT_SIGNATURE_HEADER];
+    const captured = JSON.parse(
+      Buffer.from(encoded, "base64").toString("utf8"),
+    ) as PaymentPayload;
+    if (
+      captured.payload.type !== "deposit-voucher" &&
+      captured.payload.type !== "voucher"
+    ) {
+      throw new Error("expected voucher payment");
+    }
+    captured.payload.presentation.signature = "ff".repeat(64);
+    request.headers[PAYMENT_SIGNATURE_HEADER] =
+      encodePaymentSignatureHeader(captured);
+    let executed = false;
+
+    const response = await setup.server.handlePaidRequest(request, async () => {
+      executed = true;
+      return { chargedAmount: "100" };
+    });
+
+    expect(response.status).toBe(402);
+    expect(executed).toBe(false);
+    await expect(
+      setup.store.loadChannel(payment.channelId),
+    ).resolves.toBeUndefined();
+    expect(setup.chain.daaLookupCount).toBe(0);
+    expect(setup.chain.utxoLookupCount).toBe(0);
+    expect(setup.chain.lineageDiscoveryCount).toBe(0);
+    expect(setup.chain.genesisVerificationCount).toBe(0);
   });
 
   it("rejects payments for the wrong funding outpoint", async () => {
@@ -2636,7 +3999,7 @@ describe("direct-mode server", () => {
       requestWithPayment(payment.payload, { requestHash: "aa".repeat(32) }),
       async () => {
         executions += 1;
-        return { body: "cached", chargedAmount: "50" };
+        return { body: "cached", chargedAmount: "100" };
       },
     );
     const second = await setup.server.handlePaidRequest(
@@ -2662,7 +4025,7 @@ describe("direct-mode server", () => {
       requestWithPayment(payment.payload, { requestHash: "aa".repeat(32) }),
       async () => {
         executions += 1;
-        return { body: "cached", chargedAmount: "50" };
+        return { body: "cached", chargedAmount: "100" };
       },
     );
     const second = await setup.server.handlePaidRequest(
@@ -2681,8 +4044,42 @@ describe("direct-mode server", () => {
     );
     expect(executions).toBe(1);
     const stored = await requireChannel(setup.store, payment.channelId);
-    expect(stored.chargedCumulativeAmount).toBe("50");
+    expect(stored.chargedCumulativeAmount).toBe("100");
     expect(stored.signedMaxClaimable).toBe("100");
+  });
+
+  it("returns one cached response for batch representation variants", async () => {
+    const setup = makeServer();
+    const payment = makeDepositPayment(setup);
+    let executions = 0;
+    const first = await setup.server.handlePaidRequest(
+      requestWithPayment(payment.payload, { requestHash: "aa".repeat(32) }),
+      async () => {
+        executions += 1;
+        return { body: "cached", chargedAmount: "100" };
+      },
+    );
+    const variant = structuredClone(payment.payload);
+    if (variant.payload.type !== "deposit-voucher") {
+      throw new Error("expected deposit voucher");
+    }
+    variant.payload.activeScriptPublicKey =
+      variant.payload.activeScriptPublicKey.toUpperCase();
+    variant.payload.untrusted = { ignored: true };
+    variant.untrusted = "ignored";
+    variant.extensions = { untrusted: { ignored: true } };
+    const replay = await setup.server.handlePaidRequest(
+      requestWithPayment(variant, { requestHash: "aa".repeat(32) }),
+      async () => {
+        executions += 1;
+        return { body: "wrong" };
+      },
+    );
+
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toBe("cached");
+    expect(executions).toBe(1);
   });
 
   it("keeps stale batch vouchers corrective after a later commitment", async () => {
@@ -2691,7 +4088,7 @@ describe("direct-mode server", () => {
     await setup.server.handlePaidRequest(
       requestWithPayment(deposit.payload, { requestHash: "aa".repeat(32) }),
       async () => ({
-        chargedAmount: "50",
+        chargedAmount: "100",
       }),
     );
     const channel = await requireChannel(setup.store, deposit.channelId);
@@ -2699,7 +4096,7 @@ describe("direct-mode server", () => {
     await setup.server.handlePaidRequest(
       requestWithPayment(voucher, { requestHash: "bb".repeat(32) }),
       async () => ({
-        chargedAmount: "50",
+        chargedAmount: "100",
       }),
     );
     let executed = false;
@@ -2715,6 +4112,12 @@ describe("direct-mode server", () => {
     expect(stale.status).toBe(402);
     expect(stale.body).toEqual({ error: "invalid_payment_requirements" });
     expect(executed).toBe(false);
+    const corrective = decodePaymentRequiredHeader(
+      stale.headers[PAYMENT_REQUIRED_HEADER],
+    );
+    const accepted = corrective.accepts[0] as BatchPaymentRequirements;
+    expect(accepted.extra.channelState).toBeUndefined();
+    expect(accepted.extra.voucherState).toBeUndefined();
   });
 
   it("rejects changed payment payloads for reused payment identifiers", async () => {
@@ -2727,7 +4130,7 @@ describe("direct-mode server", () => {
       requestWithPayment(deposit.payload, { requestHash: "aa".repeat(32) }),
       async () => {
         executions += 1;
-        return { body: "cached", chargedAmount: "50" };
+        return { body: "cached", chargedAmount: "100" };
       },
     );
     const channel = await requireChannel(setup.store, deposit.channelId);
@@ -2745,7 +4148,7 @@ describe("direct-mode server", () => {
     expect(second.body).toEqual({ error: "invalid_transaction_state" });
     expect(executions).toBe(1);
     const stored = await requireChannel(setup.store, deposit.channelId);
-    expect(stored.chargedCumulativeAmount).toBe("50");
+    expect(stored.chargedCumulativeAmount).toBe("100");
   });
 
   it("does not return cached content for a different payment payload", async () => {
@@ -2757,7 +4160,7 @@ describe("direct-mode server", () => {
       requestWithPayment(payment.payload, { requestHash: "aa".repeat(32) }),
       async () => ({
         body: "cached",
-        chargedAmount: "50",
+        chargedAmount: "100",
       }),
     );
     const tampered = structuredClone(payment.payload);
@@ -2788,7 +4191,7 @@ describe("direct-mode server", () => {
       requestWithPayment(payment.payload, { requestHash: "aa".repeat(32) }),
       async () => ({
         body: "cached",
-        chargedAmount: "50",
+        chargedAmount: "100",
       }),
     );
 
@@ -2815,7 +4218,7 @@ describe("direct-mode server", () => {
         requestWithPayment(payment.payload, { requestHash: "aa".repeat(32) }),
         async () => {
           executions += 1;
-          return { body: "durable", chargedAmount: "50" };
+          return { body: "durable", chargedAmount: "100" };
         },
       );
 
@@ -2828,11 +4231,98 @@ describe("direct-mode server", () => {
     await expect(
       setup.store.loadChannel(payment.channelId),
     ).resolves.toMatchObject({
-      chargedCumulativeAmount: "50",
+      chargedCumulativeAmount: "100",
     });
   });
 
-  it("retries from persisted genesis evidence after admission evidence is pruned", async () => {
+  it("allows operator recovery after a crash before the batch recovery marker", async () => {
+    const store = new UnmarkedBatchRecoveryStore();
+    const setup = makeServer({ store });
+    const payment = makeDepositPayment(setup);
+    const request = requestWithPayment(payment.payload, {
+      requestHash: "aa".repeat(32),
+    });
+    let executions = 0;
+
+    const failed = await setup.server.handlePaidRequest(request, async () => {
+      executions += 1;
+      throw new Error("process exited after protected work");
+    });
+
+    expect(failed.status).toBe(500);
+    expect(store.attemptId).toBeDefined();
+    await expect(
+      store.loadBatchSettlementAttempt(store.attemptId!),
+    ).resolves.toMatchObject({ handlerStartedAt: expect.any(String) });
+    await expect(
+      store.loadBatchSettlementAttempt(store.attemptId!),
+    ).resolves.not.toHaveProperty("recoveryReason");
+
+    await expect(
+      setup.server.recoverBatchHandler(store.attemptId!, {
+        body: "undercharged",
+        chargedAmount: "0",
+      }),
+    ).rejects.toThrow("accepted fixed charge");
+    await expect(
+      setup.server.recoverBatchHandler(store.attemptId!, { body: "recovered" }),
+    ).resolves.toMatchObject({
+      handlerResult: { body: "recovered", chargedAmount: "100" },
+    });
+    const recovered = await setup.server.handlePaidRequest(
+      request,
+      async () => {
+        executions += 1;
+        return { body: "must not run", chargedAmount: "100" };
+      },
+    );
+
+    expect(recovered).toMatchObject({ status: 200, body: "recovered" });
+    expect(executions).toBe(1);
+  });
+
+  it("finishes a matching recovered batch attempt after presentation expiry", async () => {
+    let now = Date.UTC(2030, 0, 1);
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const store = new UnmarkedBatchRecoveryStore();
+      const setup = makeServer({ store });
+      const payment = makeDepositPayment(setup);
+      if (payment.payload.payload.type !== "deposit-voucher") {
+        throw new Error("expected deposit-voucher");
+      }
+      const request = requestWithPayment(payment.payload, {
+        requestHash: "aa".repeat(32),
+      });
+      let executions = 0;
+
+      const failed = await setup.server.handlePaidRequest(request, async () => {
+        executions += 1;
+        throw new Error("uncertain protected work");
+      });
+      expect(failed.status).toBe(500);
+      expect(store.attemptId).toBeDefined();
+      await expect(
+        store.loadBatchSettlementAttempt(store.attemptId!),
+      ).resolves.toMatchObject({ handlerStartedAt: expect.any(String) });
+      await setup.server.recoverBatchHandler(store.attemptId!, {
+        body: "recovered",
+      });
+      now = Date.parse(payment.payload.payload.presentation.expiresAt) + 1;
+
+      const recovered = await setup.server.handlePaidRequest(request, async () => {
+        executions += 1;
+        return { body: "must not rerun", chargedAmount: "100" };
+      });
+
+      expect(recovered).toMatchObject({ status: 200, body: "recovered" });
+      expect(executions).toBe(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("does not register genesis state when atomic attempt admission fails", async () => {
     const store = new FailingBatchClaimStore();
     const setup = makeServer({ store });
     const payment = makeDepositPayment(setup);
@@ -2857,9 +4347,12 @@ describe("direct-mode server", () => {
       },
     );
 
-    expect(retried.status).toBe(200);
-    expect(executions).toBe(1);
-    expect(setup.chain.genesisVerificationCount).toBe(1);
+    expect(retried.status).toBe(402);
+    expect(executions).toBe(0);
+    expect(setup.chain.genesisVerificationCount).toBe(2);
+    await expect(
+      setup.store.loadChannel(payment.channelId),
+    ).resolves.toBeUndefined();
   });
 
   it("rejects covenant genesis evidence with an extra unauthorized output", async () => {
@@ -2891,7 +4384,7 @@ describe("direct-mode server", () => {
     await setup.server.handlePaidRequest(
       requestWithPayment(payment.payload, { requestHash: "aa".repeat(32) }),
       async () => ({
-        chargedAmount: "50",
+        chargedAmount: "100",
       }),
     );
 
@@ -2924,14 +4417,14 @@ describe("direct-mode server", () => {
         requestWithPayment(first.payload, { requestHash: "aa".repeat(32) }),
         async () => {
           executions += 1;
-          return { chargedAmount: "50" };
+          return { chargedAmount: "100" };
         },
       ),
       setup.server.handlePaidRequest(
         requestWithPayment(second.payload, { requestHash: "aa".repeat(32) }),
         async () => {
           executions += 1;
-          return { chargedAmount: "50" };
+          return { chargedAmount: "100" };
         },
       ),
     ]);
@@ -2954,7 +4447,7 @@ describe("direct-mode server", () => {
     await setup.server.handlePaidRequest(
       requestWithPayment(first.payload, { requestHash: "aa".repeat(32) }),
       async () => ({
-        chargedAmount: "50",
+        chargedAmount: "100",
       }),
     );
 
@@ -2970,12 +4463,18 @@ describe("direct-mode server", () => {
 
   it("offers a fresh rolling channel after the stored refund window expires", async () => {
     const store = new MemoryServerChannelStore();
+    const lockManager = new MemoryChannelLockManager();
     const rolling = {
       minimumRefundLeadDaa: "100",
       allowRollingRefundTimeoutDaa: true,
       maximumRefundHorizonDaa: "1000",
     } as const;
-    const initial = makeServer({ ...rolling, store, refundTimeoutDaa: "2000" });
+    const initial = makeServer({
+      ...rolling,
+      store,
+      lockManager,
+      refundTimeoutDaa: "2000",
+    });
     initial.chain.daa = "1000";
     const deposit = makeDepositPayment(initial);
     await initial.server.handlePaidRequest(
@@ -2992,6 +4491,7 @@ describe("direct-mode server", () => {
     const refreshed = makeServer({
       ...rolling,
       store,
+      lockManager,
       refundTimeoutDaa: "2900",
     });
     refreshed.chain.daa = "1900";
@@ -3029,7 +4529,7 @@ describe("direct-mode server", () => {
     });
   });
 
-  it("accepts a retry that selected a corrective channel-state offer", async () => {
+  it("accepts a retry that selected fresh corrective terms", async () => {
     const setup = makeServer();
     const deposit = makeDepositPayment(setup);
     await setup.server.handlePaidRequest(
@@ -3050,6 +4550,8 @@ describe("direct-mode server", () => {
       corrective.headers[PAYMENT_REQUIRED_HEADER],
     );
     const accepted = required.accepts[0] as BatchPaymentRequirements;
+    expect(accepted.extra.channelState).toBeUndefined();
+    expect(accepted.extra.voucherState).toBeUndefined();
     const retry = makeVoucherPayment(setup, channel, {
       accepted,
       voucherAmount: "200",
@@ -3057,12 +4559,12 @@ describe("direct-mode server", () => {
 
     const response = await setup.server.handlePaidRequest(
       requestWithPayment(retry),
-      async () => ({ chargedAmount: "25" }),
+      async () => ({ chargedAmount: "100" }),
     );
 
     expect(response.status).toBe(200);
     const updated = await requireChannel(setup.store, deposit.channelId);
-    expect(updated.chargedCumulativeAmount).toBe("125");
+    expect(updated.chargedCumulativeAmount).toBe("200");
   });
 
   it("accepts custom per-request payment amounts emitted by the server", async () => {
@@ -3140,9 +4642,34 @@ describe("direct-mode server", () => {
     expect(corrective.accepts[0]?.amount).toBe("75");
   });
 
+  it("preserves host-trusted context in corrective batch offers", async () => {
+    const setup = makeServer();
+    const trustedSecurityContext = {
+      principal: "user:alpha",
+      tenant: "tenant:one",
+      authorizationScopes: ["download"],
+    } satisfies TrustedSecurityContext;
+    const payment = makeDepositPayment(setup, { voucherAmount: "99" });
+
+    const response = await setup.server.handlePaidRequest(
+      requestWithPayment(payment.payload, { trustedSecurityContext }),
+      async () => ({ body: "wrong" }),
+    );
+
+    expect(response.status).toBe(402);
+    const corrective = decodePaymentRequiredHeader(
+      response.headers[PAYMENT_REQUIRED_HEADER],
+    );
+    const accepted = corrective.accepts[0] as BatchPaymentRequirements;
+    expect(accepted.extra.securityContextHash).toBe(
+      trustedSecurityContextHash(trustedSecurityContext),
+    );
+  });
+
   it("rejects voucher-only payments when stored channel terms no longer match the server", async () => {
     const store = new MemoryServerChannelStore();
-    const firstServer = makeServer({ store });
+    const lockManager = new MemoryChannelLockManager();
+    const firstServer = makeServer({ store, lockManager });
     const deposit = makeDepositPayment(firstServer);
     await firstServer.server.handlePaidRequest(
       requestWithPayment(deposit.payload),
@@ -3151,6 +4678,7 @@ describe("direct-mode server", () => {
     const channel = await requireChannel(store, deposit.channelId);
     const changedServer = makeServer({
       store,
+      lockManager,
       payTo: "kaspatest:changed-payout",
     });
     const voucher = makeVoucherPayment(changedServer, channel);
@@ -3191,10 +4719,10 @@ describe("direct-mode server", () => {
     const deposit = makeDepositPayment(setup);
     await setup.server.handlePaidRequest(
       requestWithPayment(deposit.payload),
-      async () => ({ chargedAmount: "70" }),
+      async () => ({ chargedAmount: "100" }),
     );
     const retired = await requireChannel(setup.store, deposit.channelId);
-    await setup.store.saveChannel({ ...retired, status: "retired" });
+    await retireChannelForTest(setup.store, retired);
     const retry = makeDepositPayment(setup, { voucherAmount: "170" });
 
     const response = await setup.server.handlePaidRequest(
@@ -3212,10 +4740,10 @@ describe("direct-mode server", () => {
     const deposit = makeDepositPayment(setup);
     await setup.server.handlePaidRequest(
       requestWithPayment(deposit.payload),
-      async () => ({ chargedAmount: "70" }),
+      async () => ({ chargedAmount: "100" }),
     );
     const channel = await requireChannel(setup.store, deposit.channelId);
-    await setup.store.saveChannel({ ...channel, status: "retired" });
+    await retireChannelForTest(setup.store, channel);
     const voucher = makeVoucherPayment(setup, channel);
 
     const response = await setup.server.handlePaidRequest(
@@ -3291,6 +4819,173 @@ describe("direct-mode server", () => {
     expect(response.headers[PAYMENT_REQUIRED_HEADER]).toBeTruthy();
   });
 
+  it("rejects an over-budget payment header before challenge or protected work", async () => {
+    const setup = makeServer();
+    let executed = false;
+
+    const response = await setup.server.handlePaidRequest(
+      {
+        method: "GET",
+        url: RESOURCE.url,
+        resource: RESOURCE,
+        paymentScheme: "batch-settlement",
+        headers: {
+          [PAYMENT_SIGNATURE_HEADER]: "A".repeat(
+            KASPA_X402_RESOURCE_BUDGET.maxEncodedHeaderBytes + 4,
+          ),
+        },
+      },
+      async () => {
+        executed = true;
+        return { body: "secret" };
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(executed).toBe(false);
+    expect(setup.chain.daaLookupCount).toBe(0);
+    expect(setup.chain.utxoLookupCount).toBe(0);
+    expect(setup.chain.lineageDiscoveryCount).toBe(0);
+    expect(setup.chain.genesisVerificationCount).toBe(0);
+  });
+
+  it("scans the full bounded header record before accepting payment", async () => {
+    const setup = makeServer();
+    const headers: Record<string, string> = {
+      [PAYMENT_SIGNATURE_HEADER]: "AAAA",
+    };
+    for (
+      let index = 0;
+      index < KASPA_X402_RESOURCE_BUDGET.maxObjectProperties;
+      index += 1
+    ) {
+      headers[`x-padding-${index}`] = "ok";
+    }
+
+    const response = await setup.server.handlePaidRequest(
+      {
+        method: "GET",
+        url: RESOURCE.url,
+        resource: RESOURCE,
+        paymentScheme: "batch-settlement",
+        headers,
+      },
+      async () => ({ body: "unreachable" }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(setup.chain.daaLookupCount).toBe(0);
+    expect(setup.chain.utxoLookupCount).toBe(0);
+  });
+
+  it("returns a controlled quota response per authenticated caller", async () => {
+    const setup = makeServer({
+      publicBoundaryPolicy: {
+        callerQuota: 1,
+        callerQuotaWindowMs: 60_000,
+      },
+    });
+    const request = {
+      method: "GET",
+      url: RESOURCE.url,
+      resource: RESOURCE,
+      paymentScheme: "exact" as const,
+      trustedSecurityContext: { principal: "payer-a" },
+    };
+
+    const first = await setup.server.handlePaidRequest(request, async () => ({
+      body: "unreachable",
+    }));
+    const second = await setup.server.handlePaidRequest(request, async () => ({
+      body: "unreachable",
+    }));
+    const other = await setup.server.handlePaidRequest(
+      {
+        ...request,
+        trustedSecurityContext: { principal: "payer-b" },
+      },
+      async () => ({ body: "unreachable" }),
+    );
+
+    expect(first.status).toBe(402);
+    expect(second).toMatchObject({
+      status: 429,
+      body: { error: "caller_quota_exceeded" },
+    });
+    expect(other.status).toBe(402);
+  });
+
+  it("returns a controlled timeout without reaching protected work", async () => {
+    const setup = makeServer({
+      publicBoundaryPolicy: { adapterTimeoutMs: 10 },
+    });
+    setup.chain.getVirtualDaaScore = async () => new Promise<string>(() => {});
+    let executed = false;
+
+    const response = await setup.server.handlePaidRequest(
+      {
+        method: "GET",
+        url: RESOURCE.url,
+        resource: RESOURCE,
+        paymentScheme: "batch-settlement",
+      },
+      async () => {
+        executed = true;
+        return { body: "secret" };
+      },
+    );
+
+    expect(response).toMatchObject({
+      status: 504,
+      body: { error: "adapter_timeout" },
+    });
+    expect(executed).toBe(false);
+    expect(setup.chain.utxoLookupCount).toBe(0);
+  });
+
+  it("retains public action permits until timed-out work actually settles", async () => {
+    const setup = makeServer({
+      publicBoundaryPolicy: {
+        adapterTimeoutMs: 10,
+        maxGlobalConcurrency: 1,
+        maxCallerConcurrency: 1,
+      },
+    });
+    let finish!: () => void;
+
+    const timedOut = setup.server.runPublicAdapter(
+      "facilitator-claim-settler",
+      { principal: "payer-a" },
+      "channel-a",
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await expect(timedOut).rejects.toMatchObject({
+      reason: "adapter_timeout",
+    });
+    await expect(
+      setup.server.runPublicAdapter(
+        "facilitator-refund-settler",
+        { principal: "payer-b" },
+        "channel-b",
+        async () => "blocked",
+      ),
+    ).rejects.toMatchObject({ reason: "global_concurrency_exceeded" });
+
+    finish();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await expect(
+      setup.server.runPublicAdapter(
+        "facilitator-refund-settler",
+        { principal: "payer-b" },
+        "channel-b",
+        async () => "released",
+      ),
+    ).resolves.toBe("released");
+  });
+
   it("previews claimable channels and rejects uneconomical claims", async () => {
     const setup = makeServer();
     const payment = makeDepositPayment(setup);
@@ -3319,6 +5014,43 @@ describe("direct-mode server", () => {
     setup.chain.claimFee = "100";
     const dust = await setup.server.previewClaim(payment.channelId);
     expect(dust.claimable).toBe(false);
+  });
+
+  it("keeps direct covenant claims within committed fixed charges", async () => {
+    let claimBuilds = 0;
+    const setup = makeServer({
+      claimBuilder: {
+        async buildClaimTransaction({ channel, claimAmount }) {
+          claimBuilds += 1;
+          return fixedClaim(channel, claimAmount);
+        },
+      },
+    });
+    const payment = makeDepositPayment(setup);
+    await setup.server.handlePaidRequest(
+      requestWithPayment(payment.payload),
+      async () => ({ chargedAmount: "100" }),
+    );
+
+    await expect(
+      setup.server.executeClaim(payment.channelId, "101"),
+    ).rejects.toThrow("claim amount cannot exceed unsettled actual charges");
+    expect(claimBuilds).toBe(0);
+    expect(setup.chain.sendCount).toBe(0);
+
+    const channel = await requireChannel(setup.store, payment.channelId);
+    const claim = fixedClaim(channel, "100");
+    setup.chain.setUtxo({
+      outpoint: claim.continuationOutpoint,
+      amount: claim.continuationFundingAmount,
+      scriptPublicKey: claim.continuationScriptPublicKey,
+      finality: "confirmed",
+    });
+    await expect(
+      setup.server.executeClaim(payment.channelId, "100"),
+    ).resolves.toMatchObject({ accepted: true });
+    expect(claimBuilds).toBe(1);
+    expect(setup.chain.sendCount).toBe(1);
   });
 
   it("rejects vouchers that consume the required claim reserve", async () => {
@@ -3395,7 +5127,7 @@ describe("direct-mode server", () => {
       async () => ({ chargedAmount: "100" }),
     );
     const channel = await requireChannel(setup.store, payment.channelId);
-    await setup.store.saveChannel({ ...channel, status: "retired" });
+    await retireChannelForTest(setup.store, channel);
 
     await expect(setup.server.previewClaim(payment.channelId)).rejects.toThrow(
       "channel is not active",
@@ -3445,6 +5177,96 @@ describe("direct-mode server", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("rolls a removed claim back to the predecessor as refund-only recovery", async () => {
+    const setup = makeServer({
+      claimBuilder: {
+        async buildClaimTransaction({ channel, claimAmount }) {
+          return {
+            transaction: "ab".repeat(32),
+            transactionId: CLAIM_TX,
+            claimAmount,
+            continuationOutpoint: { txid: CLAIM_TX, index: 1 },
+            continuationScriptPublicKey: deriveEscrow(
+              channel.channelConfig,
+              "100",
+            ).activeScriptPublicKey,
+            continuationFundingAmount: "900",
+          };
+        },
+      },
+    });
+    const payment = makeDepositPayment(setup);
+    await setup.server.handlePaidRequest(
+      requestWithPayment(payment.payload),
+      async () => ({ chargedAmount: "100" }),
+    );
+    const beforeClaim = await requireChannel(setup.store, payment.channelId);
+    setup.chain.setUtxo({
+      outpoint: { txid: CLAIM_TX, index: 1 },
+      amount: "900",
+      scriptPublicKey: deriveEscrow(beforeClaim.channelConfig, "100")
+        .activeScriptPublicKey,
+      finality: "confirmed",
+    });
+    const claimed = await setup.server.executeClaim(payment.channelId);
+    const acceptedClaim = claimed.channel.lineage.journal.find(
+      (event) => event.event === "accepted",
+    );
+    if (!acceptedClaim || acceptedClaim.event !== "accepted") {
+      throw new Error("missing accepted claim lineage event");
+    }
+    setup.chain.lineageDiscovery = (request) => ({
+      fromCheckpoint: request.lineage.checkpoint,
+      checkpoint: request.lineage.checkpoint,
+      continuity: "complete",
+      removedChainBlockHashes: [
+        acceptedClaim.transition.acceptance.acceptingBlockHash,
+      ],
+      addedChainBlocks: [],
+    });
+
+    const rolledBack = await setup.server.reconcileChannel(payment.channelId);
+
+    expect(rolledBack).toMatchObject({
+      activeOutpoint: beforeClaim.activeOutpoint,
+      fundingAmount: "1000",
+      claimedCumulativeAmount: "0",
+      chargedCumulativeAmount: "100",
+      signedMaxClaimable: "100",
+      status: "suspicious",
+    });
+    expect(rolledBack.lineage.journal.map((event) => event.event)).toEqual([
+      "accepted",
+      "removed",
+    ]);
+  });
+
+  it("keeps a channel unavailable after its covenant genesis is removed", async () => {
+    const setup = makeServer();
+    const payment = makeDepositPayment(setup);
+    await setup.server.handlePaidRequest(
+      requestWithPayment(payment.payload),
+      async () => ({ chargedAmount: "100" }),
+    );
+    const channel = await requireChannel(setup.store, payment.channelId);
+    setup.chain.lineageDiscovery = (request) => ({
+      fromCheckpoint: request.lineage.checkpoint,
+      checkpoint: request.lineage.checkpoint,
+      continuity: "complete",
+      removedChainBlockHashes: [
+        channel.genesisEvidence.acceptance.acceptingBlockHash,
+      ],
+      addedChainBlocks: [],
+    });
+
+    await expect(
+      setup.server.reconcileChannel(payment.channelId),
+    ).rejects.toThrow("covenant genesis was removed");
+    await expect(setup.store.loadChannel(payment.channelId)).resolves.toEqual(
+      channel,
+    );
+  });
+
   it("executes consecutive partial claims without resetting lifetime authorization", async () => {
     const secondClaimTx = "66".repeat(32);
     const claimTransactionIds = [CLAIM_TX, secondClaimTx];
@@ -3454,7 +5276,7 @@ describe("direct-mode server", () => {
       claimBuilder: {
         async buildClaimTransaction({ channel, claimAmount }) {
           const transactionId = claimTransactionIds[claimIndex++]!;
-          const settledTotal = (
+          const claimedCumulativeAmount = (
             BigInt(channel.claimedCumulativeAmount) + BigInt(claimAmount)
           ).toString();
           return {
@@ -3464,7 +5286,7 @@ describe("direct-mode server", () => {
             continuationOutpoint: { txid: transactionId, index: 1 },
             continuationScriptPublicKey: deriveEscrow(
               channel.channelConfig,
-              settledTotal,
+              claimedCumulativeAmount,
             ).activeScriptPublicKey,
             continuationFundingAmount: (
               BigInt(channel.fundingAmount) - BigInt(claimAmount)
@@ -3619,11 +5441,11 @@ describe("direct-mode server", () => {
     expect(stored.claimedCumulativeAmount).toBe("0");
     const attempt = await setup.store.loadOpenClaimAttempt(payment.channelId);
     expect(attempt?.status).toBe("broadcast");
-    expect(attempt?.finality).toBe("accepted");
+    expect(attempt?.finality).toBe("confirmed");
     expect(attempt?.transactionId).toBe(CLAIM_TX);
     expect(attempt?.continuationOutpoint).toEqual({ txid: CLAIM_TX, index: 1 });
     await expect(setup.server.executeClaim(payment.channelId)).rejects.toThrow(
-      "claim attempt is already pending",
+      "channel has an open claim attempt",
     );
     setup.chain.setUtxo({
       outpoint: { txid: CLAIM_TX, index: 1 },
@@ -3683,7 +5505,9 @@ describe("direct-mode server", () => {
   });
 
   it("rejects accepted claim recovery when the channel epoch changed", async () => {
+    const store = new SnapshotSkewStore();
     const setup = makeServer({
+      store,
       claimBuilder: {
         async buildClaimTransaction({ claimAmount }) {
           return {
@@ -3706,8 +5530,9 @@ describe("direct-mode server", () => {
       "funding outpoint",
     );
     const channel = await requireChannel(setup.store, payment.channelId);
-    await setup.store.saveChannel({
+    store.skewChannel({
       ...channel,
+      version: (BigInt(channel.version) + 1n).toString(),
       chargedCumulativeAmount: "150",
       signedMaxClaimable: "150",
     });
@@ -3724,7 +5549,9 @@ describe("direct-mode server", () => {
   });
 
   it("rejects accepted claim recovery when signed channel state changed", async () => {
+    const store = new SnapshotSkewStore();
     const setup = makeServer({
+      store,
       claimBuilder: {
         async buildClaimTransaction({ claimAmount }) {
           return {
@@ -3747,7 +5574,7 @@ describe("direct-mode server", () => {
       "funding outpoint",
     );
     const channel = await requireChannel(setup.store, payment.channelId);
-    await setup.store.saveChannel({ ...channel, signedMaxClaimable: "101" });
+    store.skewChannel({ ...channel, signedMaxClaimable: "101" });
     setup.chain.setUtxo({
       outpoint: { txid: CLAIM_TX, index: 1 },
       amount: "900",
@@ -3799,7 +5626,7 @@ describe("direct-mode server", () => {
 
     expect(paid.status).toBe(402);
     await expect(setup.server.executeClaim(payment.channelId)).rejects.toThrow(
-      "claim attempt is already pending",
+      "channel has an open claim attempt",
     );
     expect(setup.chain.sendCount).toBe(1);
   });
@@ -3839,7 +5666,6 @@ describe("direct-mode server", () => {
       payment.channelId,
       {
         transactionId: CLAIM_TX,
-        finality: "accepted",
       },
     );
 
@@ -3852,7 +5678,6 @@ describe("direct-mode server", () => {
 
   it("reports verified continuation finality during claim recovery", async () => {
     const setup = makeServer({
-      acceptedFinality: "confirmed",
       claimBuilder: {
         async buildClaimTransaction({ claimAmount }) {
           return {
@@ -3880,6 +5705,7 @@ describe("direct-mode server", () => {
       requestWithPayment(payment.payload),
       async () => ({ chargedAmount: "100" }),
     );
+    setup.chain.finality = "broadcast";
     const broadcast = await setup.server.executeClaim(payment.channelId);
     expect(broadcast.accepted).toBe(false);
     setup.chain.setUtxo({
@@ -3893,7 +5719,6 @@ describe("direct-mode server", () => {
       payment.channelId,
       {
         transactionId: CLAIM_TX,
-        finality: "accepted",
       },
     );
 
@@ -3902,11 +5727,13 @@ describe("direct-mode server", () => {
     expect(recovered.channel.claimedCumulativeAmount).toBe("100");
   });
 
-  it("keeps a persisted confirmed claim threshold after restart under accepted policy", async () => {
+  it("keeps a persisted stronger claim threshold after restart", async () => {
     const store = new MemoryServerChannelStore();
+    const lockManager = new MemoryChannelLockManager();
     const initial = makeServer({
       store,
-      acceptedFinality: "confirmed",
+      lockManager,
+      confirmationThreshold: 31,
       claimBuilder: {
         async buildClaimTransaction({ claimAmount }) {
           return {
@@ -3929,6 +5756,7 @@ describe("direct-mode server", () => {
       amount: deposit.fundingAmountSompi,
       scriptPublicKey: deposit.activeScriptPublicKey,
       finality: "confirmed",
+      acceptance: acceptedChainEvidence(deposit.fundingOutpoint.txid, 31),
     });
     await initial.server.handlePaidRequest(
       requestWithPayment(payment.payload),
@@ -3940,12 +5768,16 @@ describe("direct-mode server", () => {
     await expect(
       store.loadOpenClaimAttempt(payment.channelId),
     ).resolves.toMatchObject({
-      requiredFinality: "confirmed",
+      requiredConfirmations: 31,
       status: "broadcast",
       finality: "accepted",
     });
 
-    const restarted = makeServer({ store, acceptedFinality: "accepted" });
+    const restarted = makeServer({
+      store,
+      lockManager,
+      confirmationThreshold: 30,
+    });
     restarted.chain.setUtxo({
       outpoint: { txid: CLAIM_TX, index: 1 },
       amount: "900",
@@ -3954,7 +5786,7 @@ describe("direct-mode server", () => {
     });
     await expect(
       restarted.server.recoverAcceptedClaim(payment.channelId),
-    ).rejects.toThrow("has not reached required finality");
+    ).rejects.toThrow("configured confirmation threshold");
     await expect(
       store.loadOpenClaimAttempt(payment.channelId),
     ).resolves.toMatchObject({ status: "broadcast" });
@@ -3964,6 +5796,7 @@ describe("direct-mode server", () => {
       amount: "900",
       scriptPublicKey: "0000" + "77".repeat(34),
       finality: "confirmed",
+      acceptance: acceptedChainEvidence(CLAIM_TX, 31),
     });
     const recovered = await restarted.server.recoverAcceptedClaim(
       payment.channelId,
@@ -3972,11 +5805,13 @@ describe("direct-mode server", () => {
     expect(recovered.channel.claimedCumulativeAmount).toBe("100");
   });
 
-  it("tightens a persisted accepted claim threshold after restart under confirmed policy", async () => {
+  it("does not tighten a persisted claim threshold after restart", async () => {
     const store = new MemoryServerChannelStore();
+    const lockManager = new MemoryChannelLockManager();
     const initial = makeServer({
       store,
-      acceptedFinality: "accepted",
+      lockManager,
+      confirmationThreshold: 30,
       claimBuilder: {
         async buildClaimTransaction({ claimAmount }) {
           return {
@@ -3995,36 +5830,31 @@ describe("direct-mode server", () => {
       requestWithPayment(payment.payload),
       async () => ({ chargedAmount: "100" }),
     );
+    initial.chain.finality = "broadcast";
     await expect(
       initial.server.executeClaim(payment.channelId),
-    ).rejects.toThrow("funding outpoint");
+    ).resolves.toMatchObject({
+      accepted: false,
+      finality: "broadcast",
+    });
     await expect(
       store.loadOpenClaimAttempt(payment.channelId),
     ).resolves.toMatchObject({
-      requiredFinality: "accepted",
+      requiredConfirmations: 30,
       status: "broadcast",
-      finality: "accepted",
+      finality: "broadcast",
     });
 
-    const restarted = makeServer({ store, acceptedFinality: "confirmed" });
+    const restarted = makeServer({
+      store,
+      lockManager,
+      confirmationThreshold: 31,
+    });
     restarted.chain.setUtxo({
       outpoint: { txid: CLAIM_TX, index: 1 },
       amount: "900",
       scriptPublicKey: "0000" + "77".repeat(34),
       finality: "accepted",
-    });
-    await expect(
-      restarted.server.recoverAcceptedClaim(payment.channelId),
-    ).rejects.toThrow("has not reached required finality");
-    await expect(
-      store.loadOpenClaimAttempt(payment.channelId),
-    ).resolves.toMatchObject({ status: "broadcast" });
-
-    restarted.chain.setUtxo({
-      outpoint: { txid: CLAIM_TX, index: 1 },
-      amount: "900",
-      scriptPublicKey: "0000" + "77".repeat(34),
-      finality: "confirmed",
     });
     const recovered = await restarted.server.recoverAcceptedClaim(
       payment.channelId,
@@ -4035,9 +5865,8 @@ describe("direct-mode server", () => {
 
   it("requires trusted exact-txid rejection before abandoning an open claim", async () => {
     let reconciliation: ClaimReconciliation = {
-      status: "unknown",
       transactionId: CLAIM_TX,
-      reason: "indexing lag",
+      evidence: unknownChainEvidence(CLAIM_TX, "indexing lag"),
     };
     const setup = makeServer({
       claimReconciler: {
@@ -4072,25 +5901,41 @@ describe("direct-mode server", () => {
       setup.server.abandonClaimAttempt(payment.channelId),
     ).rejects.toThrow("remains unknown");
     reconciliation = {
-      status: "rejected",
       transactionId: "66".repeat(32),
-      reason: "not accepted",
+      evidence: absentChainEvidence("66".repeat(32), "not accepted"),
     };
     await expect(
       setup.server.abandonClaimAttempt(payment.channelId),
     ).rejects.toThrow("does not match the persisted signed transaction");
     reconciliation = {
-      status: "accepted",
       transactionId: CLAIM_TX,
-      finality: "accepted",
+      evidence: acceptedChainEvidence(CLAIM_TX),
     };
     await expect(
       setup.server.abandonClaimAttempt(payment.channelId),
     ).rejects.toThrow("must be recovered");
     reconciliation = {
-      status: "rejected",
       transactionId: CLAIM_TX,
-      reason: "authoritative node rejection",
+      evidence: {
+        status: "absent",
+        transactionId: CLAIM_TX,
+        reason: "an unrelated outpoint was spent",
+        proof: {
+          kind: "confirmed-conflicting-spend",
+          spentOutpoint: { txid: "67".repeat(32), index: 7 },
+          conflictingTransaction: acceptedChainEvidence("68".repeat(32)),
+        },
+      },
+    };
+    await expect(
+      setup.server.abandonClaimAttempt(payment.channelId),
+    ).rejects.toThrow("remains unknown");
+    await expect(
+      setup.store.loadOpenClaimAttempt(payment.channelId),
+    ).resolves.toBeDefined();
+    reconciliation = {
+      transactionId: CLAIM_TX,
+      evidence: absentChainEvidence(CLAIM_TX, "authoritative node rejection"),
     };
     await setup.server.abandonClaimAttempt(payment.channelId);
     await expect(
@@ -4173,7 +6018,38 @@ describe("direct-mode server", () => {
     ).resolves.toMatchObject({ transactionId: CLAIM_TX, status: "pending" });
   });
 
-  it("recovers a broadcast claim after external acceptance evidence", async () => {
+  it("fails closed when claim broadcast evidence is missing", async () => {
+    const setup = makeServer({
+      claimBuilder: {
+        async buildClaimTransaction({ claimAmount }) {
+          return {
+            transaction: "ab".repeat(32),
+            transactionId: CLAIM_TX,
+            claimAmount,
+            continuationOutpoint: { txid: CLAIM_TX, index: 1 },
+            continuationScriptPublicKey: "0000" + "77".repeat(34),
+            continuationFundingAmount: "900",
+          };
+        },
+      },
+    });
+    const payment = makeDepositPayment(setup);
+    await setup.server.handlePaidRequest(
+      requestWithPayment(payment.payload),
+      async () => ({ chargedAmount: "100" }),
+    );
+    setup.chain.useSendEvidenceOverride = true;
+    setup.chain.sendEvidenceOverride = undefined;
+
+    await expect(setup.server.executeClaim(payment.channelId)).rejects.toThrow(
+      "broadcast claim evidence does not match the persisted transaction",
+    );
+    await expect(
+      setup.store.loadOpenClaimAttempt(payment.channelId),
+    ).resolves.toMatchObject({ transactionId: CLAIM_TX, status: "pending" });
+  });
+
+  it("ignores caller claim evidence and recovers only from the trusted UTXO", async () => {
     const setup = makeServer({
       claimBuilder: {
         async buildClaimTransaction({ claimAmount }) {
@@ -4201,21 +6077,26 @@ describe("direct-mode server", () => {
       amount: "900",
       scriptPublicKey: "0000" + "77".repeat(34),
       finality: "accepted",
+      acceptance: acceptedChainEvidence(CLAIM_TX, 29),
     });
     await expect(
       setup.server.recoverAcceptedClaim(payment.channelId, {
         transactionId: CLAIM_TX,
-        finality: "broadcast" as never,
-      }),
-    ).rejects.toThrow(
-      "accepted claim recovery needs accepted transaction evidence",
-    );
+        evidence: acceptedChainEvidence(CLAIM_TX),
+      } as unknown as ClaimRecoveryInput),
+    ).rejects.toThrow("configured confirmation threshold");
+
+    setup.chain.setUtxo({
+      outpoint: { txid: CLAIM_TX, index: 1 },
+      amount: "900",
+      scriptPublicKey: "0000" + "77".repeat(34),
+      finality: "accepted",
+    });
 
     const recovered = await setup.server.recoverAcceptedClaim(
       payment.channelId,
       {
         transactionId: CLAIM_TX,
-        finality: "accepted",
       },
     );
 
@@ -4343,12 +6224,18 @@ function makeServer(overrides: Partial<DirectModeServerConfig> = {}) {
     amount: "100",
     refundTimeoutDaa: "1000",
     minimumRefundLeadDaa: "0",
+    confirmationThreshold: CONFIRMATION_THRESHOLD,
     store,
     chainProvider: chain,
     addressCodec: new FakeAddressCodec(),
     voucherVerifier: {
       verifyVoucher({ digest, voucher }) {
         return voucher.signature === `${digest}${digest}`;
+      },
+    },
+    batchPresentationVerifier: {
+      verifyPresentation({ digest, signature }) {
+        return signature === `${digest}${digest}`;
       },
     },
     exactProfile: "standard-native",
@@ -4380,6 +6267,51 @@ function makeServer(overrides: Partial<DirectModeServerConfig> = {}) {
         return voucher.signature === `${digest}${digest}`;
       },
     },
+  };
+}
+
+function deploymentNoopLock(coordinationDomain: string) {
+  return {
+    coordinationScope: "deployment-wide" as const,
+    coordinationDomain,
+    runExclusive<T>(_channelId: Hash32Hex, fn: () => Promise<T>): Promise<T> {
+      return fn();
+    },
+  };
+}
+
+function acceptedTopUp(
+  previous: ServerChannelRecord,
+  next: ServerChannelRecord,
+) {
+  return {
+    covenantId: previous.covenantId,
+    spentOutpoint: previous.activeOutpoint,
+    successorOutpoint: next.activeOutpoint,
+    successorScriptPublicKey: next.activeScriptPublicKey,
+    successorAmount: next.fundingAmount,
+    authorizedSuccessorCount: 1,
+    authorizingInput: 0,
+    acceptance: acceptedChainEvidence(next.activeOutpoint.txid),
+  };
+}
+
+function fixedClaim(channel: ServerChannelRecord, claimAmount: string) {
+  const claimedCumulativeAmount = (
+    BigInt(channel.claimedCumulativeAmount) + BigInt(claimAmount)
+  ).toString();
+  return {
+    transaction: "ab".repeat(32),
+    transactionId: CLAIM_TX,
+    claimAmount,
+    continuationOutpoint: { txid: CLAIM_TX, index: 1 },
+    continuationScriptPublicKey: deriveEscrow(
+      channel.channelConfig,
+      claimedCumulativeAmount,
+    ).activeScriptPublicKey,
+    continuationFundingAmount: (
+      BigInt(channel.fundingAmount) - BigInt(claimAmount)
+    ).toString(),
   };
 }
 
@@ -4441,6 +6373,14 @@ async function makeAdditiveServer(
     addressCodec,
     exactTransactionVerifier:
       overrides.exactTransactionVerifier ?? defaultVerifier,
+    exactSettlementReconciler: overrides.exactSettlementReconciler ?? {
+      reconcileExactSettlement(attempt) {
+        return {
+          status: "unknown" as const,
+          transactionId: attempt.transactionId,
+        };
+      },
+    },
   });
   const head = exactHead({
     scriptPublicKey,
@@ -4512,7 +6452,11 @@ function exactHeadChallenge(
 
 function makeAdditivePayment(
   accepted: ExactPaymentRequirements,
-  options: { requestHash?: Hash32Hex; transactionId?: Hash32Hex } = {},
+  options: {
+    requestHash?: Hash32Hex;
+    transactionId?: Hash32Hex;
+    paymentIdentifier?: string | null;
+  } = {},
 ): PaymentPayload {
   const requestHash = options.requestHash ?? testRequestFingerprint(accepted);
   const transactionId = options.transactionId ?? EXACT_TX_ID;
@@ -4535,13 +6479,18 @@ function makeAdditivePayment(
         inputIndex: 1,
       }),
     },
+    ...(options.paymentIdentifier === null
+      ? {}
+      : paymentIdentifierExtension(
+          options.paymentIdentifier ?? `exact_${requestHash}`,
+        )),
   };
 }
 
 function makeExactPayment(
   setup: ReturnType<typeof makeServer>,
   options: {
-    paymentIdentifier?: string;
+    paymentIdentifier?: string | null;
     transactionId?: Hash32Hex;
     paymentOutputIndex?: number;
     requestHash?: Hash32Hex;
@@ -4578,9 +6527,11 @@ function makeExactPayment(
         paymentOutputIndex,
       }),
     },
-    ...(options.paymentIdentifier
-      ? paymentIdentifierExtension(options.paymentIdentifier)
-      : {}),
+    ...(options.paymentIdentifier === null
+      ? {}
+      : paymentIdentifierExtension(
+          options.paymentIdentifier ?? `exact_${requestHash}`,
+        )),
   };
 }
 
@@ -4612,6 +6563,7 @@ function makeStandardExactPayment(
         inputIndex: 0,
       }),
     },
+    ...paymentIdentifierExtension(`exact_${requestHash}`),
   };
 }
 
@@ -4691,7 +6643,7 @@ function makeDepositPayment(
   const channelConfig: ChannelConfig = {
     network: accepted.network,
     asset: "KAS",
-    templateId: "kaspa-x402-escrow-v2",
+    templateId: "kaspa-x402-escrow-v4",
     clientPublicKey: CLIENT_KEY,
     serverPublicKey: SERVER_KEY,
     payTo: accepted.payTo,
@@ -4730,6 +6682,14 @@ function makeDepositPayment(
         fundingAmountSompi: fundingAmount,
         activeScriptPublicKey: derived.activeScriptPublicKey,
         voucher,
+        presentation: signBatchPresentation({
+          accepted,
+          channelId: id,
+          covenantId: voucher.covenantId,
+          voucher,
+          requestFingerprint: testBatchRequestFingerprint(accepted),
+          paymentIdentifier: options.paymentIdentifier ?? null,
+        }),
       },
       ...(options.paymentIdentifier
         ? paymentIdentifierExtension(options.paymentIdentifier)
@@ -4758,6 +6718,11 @@ function makeVoucherPayment(
     (BigInt(channel.signedMaxClaimable) > BigInt(requiredAmount)
       ? channel.signedMaxClaimable
       : requiredAmount);
+  const voucher = signVoucher({
+    network: accepted.network,
+    covenantId: channel.covenantId,
+    amount,
+  });
   return {
     x402Version: X402_VERSION,
     accepted,
@@ -4767,10 +6732,14 @@ function makeVoucherPayment(
       clientPublicKey: channel.channelConfig.clientPublicKey,
       fundingOutpoint: channel.activeOutpoint,
       activeScriptPublicKey: channel.activeScriptPublicKey,
-      voucher: signVoucher({
-        network: accepted.network,
+      voucher,
+      presentation: signBatchPresentation({
+        accepted,
+        channelId: channel.channelId,
         covenantId: channel.covenantId,
-        amount,
+        voucher,
+        requestFingerprint: testBatchRequestFingerprint(accepted),
+        paymentIdentifier: options.paymentIdentifier ?? null,
       }),
     },
     ...(options.paymentIdentifier
@@ -4787,8 +6756,41 @@ function requestWithPayment(
     paymentScheme?: "exact" | "batch-settlement";
     paymentSchemes?: readonly ("exact" | "batch-settlement")[];
     body?: unknown;
+    trustedSecurityContext?: TrustedSecurityContext;
   } = {},
 ) {
+  let requestPayment = paymentPayload;
+  if (
+    paymentPayload.accepted.scheme === "batch-settlement" &&
+    (paymentPayload.payload.type === "deposit-voucher" ||
+      paymentPayload.payload.type === "voucher")
+  ) {
+    requestPayment = structuredClone(paymentPayload);
+    if (
+      requestPayment.payload.type !== "deposit-voucher" &&
+      requestPayment.payload.type !== "voucher"
+    ) {
+      throw new Error("expected voucher payment");
+    }
+    const unsigned = {
+      ...requestPayment.payload.presentation,
+      requestFingerprint: bindRequestHashToTrustedContext(
+        options.requestHash ??
+          testBatchRequestFingerprint(
+            requestPayment.accepted as BatchPaymentRequirements,
+            options.body,
+          ),
+        options.trustedSecurityContext,
+      ),
+      paymentIdentifier: testPaymentIdentifier(requestPayment),
+    };
+    const digest = batchPresentationDigest(unsigned);
+    requestPayment.payload.presentation = {
+      ...unsigned,
+      digest,
+      signature: `${digest}${digest}`,
+    };
+  }
   return {
     url: RESOURCE.url,
     resource: RESOURCE,
@@ -4797,8 +6799,9 @@ function requestWithPayment(
     paymentScheme: options.paymentScheme,
     paymentSchemes: options.paymentSchemes,
     requestHash: options.requestHash,
+    trustedSecurityContext: options.trustedSecurityContext,
     headers: {
-      [PAYMENT_SIGNATURE_HEADER]: encodePaymentSignatureHeader(paymentPayload),
+      [PAYMENT_SIGNATURE_HEADER]: encodePaymentSignatureHeader(requestPayment),
     },
   };
 }
@@ -4839,6 +6842,30 @@ async function requireChannel(
   return channel;
 }
 
+async function retireChannelForTest(
+  store: ServerChannelStore,
+  channel: ServerChannelRecord,
+): Promise<void> {
+  const leaseId = sha256Hex(
+    stableStringify({
+      scope: "kaspa-x402:test:retirement",
+      channelId: channel.channelId,
+      version: channel.version,
+    }),
+  );
+  await store.claimChannelOperation({
+    leaseId,
+    channelId: channel.channelId,
+    covenantId: channel.covenantId,
+    kind: "retirement",
+    expected: channel,
+    status: "reserved",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+  await store.retireChannel(channel.channelId, leaseId, channel);
+}
+
 function paymentIdentifierExtension(id: string) {
   return {
     extensions: {
@@ -4852,7 +6879,7 @@ function paymentIdentifierExtension(id: string) {
 
 function deriveEscrow(
   channelConfig: ChannelConfig,
-  settledTotal = "0",
+  claimedCumulativeAmount = "0",
 ): {
   escrowAddress: string;
   activeScriptPublicKey: string;
@@ -4881,7 +6908,7 @@ function deriveEscrow(
     payoutScriptPublicKeyHash,
     refundScriptPublicKeyHash,
     timeoutDaa: channelConfig.refundTimeoutDaa,
-    settledTotal,
+    claimedCumulativeAmount,
   };
   const script = escrowScriptPublicKey(params);
   return {
@@ -4898,12 +6925,66 @@ function signVoucher(input: {
   amount: string;
   badSignature?: boolean;
 }) {
-  const digest = voucherDigest(input);
+  const digest = voucherDigest({
+    network: input.network,
+    covenantId: input.covenantId,
+    authorizedCumulativeAmount: input.amount,
+  });
   return {
     covenantId: input.covenantId,
-    amount: input.amount,
+    authorizedCumulativeAmount: input.amount,
     signature: input.badSignature ? "ff".repeat(64) : `${digest}${digest}`,
   };
+}
+
+function testBatchRequestFingerprint(
+  accepted: BatchPaymentRequirements,
+  body?: unknown,
+): Hash32Hex {
+  return sha256Hex(
+    stableStringify({
+      method: "GET",
+      url: RESOURCE.url,
+      body: body ?? null,
+      paymentRequirementsHash: sha256Hex(stableStringify(accepted)),
+    }),
+  );
+}
+
+function testPaymentIdentifier(paymentPayload: PaymentPayload): string | null {
+  const extension = paymentPayload.extensions?.["payment-identifier"] as
+    { info?: { id?: unknown } } | undefined;
+  return typeof extension?.info?.id === "string" ? extension.info.id : null;
+}
+
+function signBatchPresentation(input: {
+  accepted: BatchPaymentRequirements;
+  channelId: Hash32Hex;
+  covenantId: Hash32Hex;
+  voucher: { authorizedCumulativeAmount: string; signature: string };
+  requestFingerprint: Hash32Hex;
+  paymentIdentifier: string | null;
+}) {
+  const unsigned = {
+    version: "kaspa-x402-batch-presentation-v1" as const,
+    requestFingerprint: input.requestFingerprint,
+    acceptedRequirementsHash: batchPaymentRequirementsHash(input.accepted),
+    securityContextHash: input.accepted.extra.securityContextHash,
+    channelId: input.channelId,
+    covenantId: input.covenantId,
+    voucherDigest: voucherDigest({
+      network: input.accepted.network,
+      covenantId: input.covenantId,
+      authorizedCumulativeAmount: input.voucher.authorizedCumulativeAmount,
+    }),
+    paymentIdentifier: input.paymentIdentifier,
+    nonce: SALT,
+    expiresAt: new Date(
+      Date.now() + input.accepted.maxTimeoutSeconds * 1_000 - 1_000,
+    ).toISOString(),
+  };
+  const digest = batchPresentationDigest(unsigned);
+  return { ...unsigned, digest, signature: `${digest}${digest}` };
 }
 
 function hexBytes(hex: string): Uint8Array {
@@ -4927,24 +7008,50 @@ class FakeChainProvider implements ServerChainProvider {
   finality: SettlementFinality = "accepted";
   sendCount = 0;
   sendTransactionId = CLAIM_TX;
+  useSendEvidenceOverride = false;
+  sendEvidenceOverride: unknown;
   readonly sentTransactions: string[] = [];
   sendFailure?: Error;
   genesisAvailable = true;
   genesisVerificationCount = 0;
+  daaLookupCount = 0;
+  utxoLookupCount = 0;
+  lineageDiscoveryCount = 0;
   genesisTotalOutputCount = 1;
+  lineageDiscovery?: (
+    request: Parameters<ServerChainProvider["discoverCovenantLineage"]>[0],
+  ) => ReturnType<
+    ServerChainProvider["discoverCovenantLineage"]
+  > extends Promise<infer T>
+    ? T
+    : never;
 
-  setUtxo(utxo: ChainUtxo): void {
+  setUtxo(
+    utxo: Omit<ChainUtxo, "acceptance"> &
+      Partial<Pick<ChainUtxo, "acceptance">>,
+  ): void {
     this.utxos.set(
       outpointKey(utxo.outpoint),
-      structuredClone({ covenantId: COVENANT_ID, ...utxo }),
+      structuredClone({
+        covenantId: COVENANT_ID,
+        ...utxo,
+        acceptance:
+          utxo.acceptance ??
+          acceptedChainEvidence(
+            utxo.outpoint.txid,
+            utxo.finality === "broadcast" ? 1 : CONFIRMATION_THRESHOLD,
+          ),
+      }),
     );
   }
 
   async getUtxo(outpoint: FundingOutpoint): Promise<ChainUtxo | null> {
+    this.utxoLookupCount += 1;
     return this.utxos.get(outpointKey(outpoint)) ?? null;
   }
 
   async getVirtualDaaScore(): Promise<string> {
+    this.daaLookupCount += 1;
     return this.daa;
   }
 
@@ -4962,6 +7069,21 @@ class FakeChainProvider implements ServerChainProvider {
       genesisAmount: request.utxo.amount,
       totalOutputCount: this.genesisTotalOutputCount,
       authorizedOutputCount: 1,
+      acceptance: request.utxo.acceptance,
+    };
+  }
+
+  async discoverCovenantLineage(
+    request: Parameters<ServerChainProvider["discoverCovenantLineage"]>[0],
+  ) {
+    this.lineageDiscoveryCount += 1;
+    if (this.lineageDiscovery) return this.lineageDiscovery(request);
+    return {
+      fromCheckpoint: request.lineage.checkpoint,
+      checkpoint: request.lineage.checkpoint,
+      continuity: "complete" as const,
+      removedChainBlockHashes: [],
+      addedChainBlocks: [],
     };
   }
 
@@ -4969,13 +7091,85 @@ class FakeChainProvider implements ServerChainProvider {
     return this.claimFee;
   }
 
-  async sendTransaction(
-    transaction: string,
-  ): Promise<{ transactionId: string; finality: SettlementFinality }> {
+  async sendTransaction(transaction: string) {
     this.sendCount += 1;
     this.sentTransactions.push(transaction);
     if (this.sendFailure) throw this.sendFailure;
-    return { transactionId: this.sendTransactionId, finality: this.finality };
+    const defaultEvidence =
+      this.finality === "broadcast"
+        ? {
+            status: "unknown" as const,
+            transactionId: this.sendTransactionId,
+            reason: "not yet indexed",
+          }
+        : acceptedChainEvidence(this.sendTransactionId);
+    return {
+      transactionId: this.sendTransactionId,
+      finality: this.finality,
+      evidence: (this.useSendEvidenceOverride
+        ? this.sendEvidenceOverride
+        : defaultEvidence) as never,
+    };
+  }
+
+  resetReadCounts(): void {
+    this.daaLookupCount = 0;
+    this.utxoLookupCount = 0;
+    this.lineageDiscoveryCount = 0;
+    this.genesisVerificationCount = 0;
+  }
+}
+
+type OperationGatePoint =
+  "before-batch-claim" | "after-batch-claim" | "after-channel-claim";
+
+class OperationGateStore extends MemoryServerChannelStore {
+  #point?: OperationGatePoint;
+  #blocked?: Promise<void>;
+  #signalBlocked?: () => void;
+  #release?: Promise<void>;
+  #signalRelease?: () => void;
+
+  arm(point: OperationGatePoint): void {
+    this.#point = point;
+    this.#blocked = new Promise((resolve) => {
+      this.#signalBlocked = resolve;
+    });
+    this.#release = new Promise((resolve) => {
+      this.#signalRelease = resolve;
+    });
+  }
+
+  async waitUntilBlocked(): Promise<void> {
+    if (!this.#blocked) throw new Error("operation gate is not armed");
+    await this.#blocked;
+  }
+
+  release(): void {
+    if (!this.#signalRelease) throw new Error("operation gate is not armed");
+    this.#signalRelease();
+    this.#signalRelease = undefined;
+  }
+
+  override async claimBatchSettlement(input: BatchSettlementAttemptRecord) {
+    await this.#pause("before-batch-claim");
+    const result = await super.claimBatchSettlement(input);
+    await this.#pause("after-batch-claim");
+    return result;
+  }
+
+  override async claimChannelOperation(input: ChannelOperationLeaseRecord) {
+    const result = await super.claimChannelOperation(input);
+    if (input.kind === "claim") await this.#pause("after-channel-claim");
+    return result;
+  }
+
+  async #pause(point: OperationGatePoint): Promise<void> {
+    if (this.#point !== point) return;
+    const release = this.#release!;
+    this.#point = undefined;
+    this.#signalBlocked!();
+    await release;
   }
 }
 
@@ -5014,6 +7208,40 @@ class FailingBatchClaimStore extends MemoryServerChannelStore {
   }
 }
 
+class UnmarkedBatchRecoveryStore extends MemoryServerChannelStore {
+  attemptId?: Hash32Hex;
+
+  async claimBatchSettlement(record: BatchSettlementAttemptRecord) {
+    this.attemptId = record.attemptId;
+    return super.claimBatchSettlement(record);
+  }
+
+  async markBatchHandlerRecoveryRequired(
+    _attemptId: Hash32Hex,
+    _reason: string,
+    _observedAt: string,
+  ): Promise<void> {
+    throw new Error("transport failed before recovery marker persistence");
+  }
+}
+
+class ExpiringBatchHandlerAdmissionStore extends MemoryServerChannelStore {
+  attemptId?: Hash32Hex;
+  afterHandlerAdmission?: () => void;
+
+  override async beginBatchHandler(
+    attemptId: Hash32Hex,
+    startedAt: string,
+  ): Promise<boolean> {
+    const started = await super.beginBatchHandler(attemptId, startedAt);
+    if (started) {
+      this.attemptId = attemptId;
+      this.afterHandlerAdmission?.();
+    }
+    return started;
+  }
+}
+
 class FailingExactCommitStore extends MemoryServerChannelStore {
   #remainingFailures: number;
 
@@ -5037,6 +7265,21 @@ class FailingApplyClaimStore extends MemoryServerChannelStore {
     _attempt: ClaimAttemptRecord,
   ): Promise<void> {
     throw new Error("claim apply unavailable");
+  }
+}
+
+class SnapshotSkewStore extends MemoryServerChannelStore {
+  readonly #skewedChannels = new Map<Hash32Hex, ServerChannelRecord>();
+
+  skewChannel(channel: ServerChannelRecord): void {
+    this.#skewedChannels.set(channel.channelId, structuredClone(channel));
+  }
+
+  async loadChannel(
+    channelId: Hash32Hex,
+  ): Promise<ServerChannelRecord | undefined> {
+    const skewed = this.#skewedChannels.get(channelId);
+    return skewed ? structuredClone(skewed) : super.loadChannel(channelId);
   }
 }
 

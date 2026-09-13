@@ -20,7 +20,7 @@
   "type": "module",
   "scripts": {
     "build": "npm --workspace @kaspa-x402/core run build && npm --workspace @kaspa-x402/covenant run build && npm --workspace @kaspa-x402/server run build && npm --workspace @kaspa-x402/client run build && npm --workspace @kaspa-x402/facilitator run build && npm --workspace @kaspa-x402/cli run build && npm --workspace @kaspa-x402/demo-gateway run build",
-    "test": "npm --workspace @kaspa-x402/core test && npm --workspace @kaspa-x402/covenant test && npm --workspace @kaspa-x402/server test && npm --workspace @kaspa-x402/client test && npm --workspace @kaspa-x402/facilitator test && npm --workspace @kaspa-x402/cli test && npm --workspace @kaspa-x402/demo-gateway test && node --test scripts/npm-pack-output.test.mjs scripts/covenant-artifact-clean-room.test.mjs",
+    "test": "npm --workspace @kaspa-x402/core test && npm --workspace @kaspa-x402/covenant test && npm --workspace @kaspa-x402/server test && npm --workspace @kaspa-x402/client test && npm --workspace @kaspa-x402/facilitator test && npm --workspace @kaspa-x402/cli test && npm --workspace @kaspa-x402/demo-gateway test && node --test scripts/npm-pack-output.test.mjs scripts/covenant-artifact-clean-room.test.mjs scripts/read-bounded-response.test.mjs scripts/proof-output-security.test.mjs scripts/transaction-input-outpoint.test.mjs",
     "site:build": "node scripts/site-build.mjs",
     "site:check": "node scripts/site-check.mjs",
     "site:deploy:check": "node scripts/site-build.mjs --require-clean && node scripts/site-check.mjs --require-clean",
@@ -38,6 +38,7 @@
     "generate:schema-validators": "node scripts/generate-schema-validators.mjs",
     "validate:schemas": "node scripts/validate-schemas.mjs",
     "validate:tx-v1-consensus": "node scripts/validate-tx-v1-consensus.mjs",
+    "validate:reorg-consensus": "node scripts/validate-reorg-consensus.mjs",
     "proof:offline": "node scripts/proof-offline.mjs",
     "proof:mainnet:offline": "node scripts/proof-mainnet-shapes.mjs",
     "proof:live:check": "node scripts/proof-live-testnet.mjs --check",
@@ -54,7 +55,8 @@
     "check:exact-interop-vector": "npm --workspace @kaspa-x402/core run build && node scripts/generate-exact-interop-vector.mjs --check",
     "vectors:batch-interop": "npm --workspace @kaspa-x402/core run build && npm --workspace @kaspa-x402/covenant run build && node scripts/generate-batch-interop-vector.mjs",
     "check:batch-interop-vector": "npm --workspace @kaspa-x402/core run build && npm --workspace @kaspa-x402/covenant run build && node scripts/generate-batch-interop-vector.mjs --check && node --test scripts/batch-interop-crosslinks.test.mjs",
-    "check:covenant-fixtures": "npm --workspace @kaspa-x402/covenant run build && node scripts/check-covenant-fixtures.mjs"
+    "check:covenant-fixtures": "npm --workspace @kaspa-x402/covenant run build && node scripts/check-covenant-fixtures.mjs",
+    "generate:covenant-fixture": "node scripts/generate-covenant-fixture.mjs"
   },
   "workspaces": [
     "packages/*"
