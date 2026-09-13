@@ -13,8 +13,10 @@ Current repository-backed deployment evidence: v1 RC1 Worker version
 `a502fc42046dd18b8ac7712e9b13ebe90f70c9d5094a86a73c4300e625943575`
 settled at accepted finality; its identical retry returned the stored success,
 and cross-resource reuse was rejected. The fresh funded release run also
-completed all 18 required flows, including hosted batch deposit, voucher, and
-idempotent-retry validation against the exact RC source.
+completed all 18 required flows. Its batch deposit, voucher, and
+idempotent-retry checks ran against a local Worker built from the exact RC
+source, not the public gateway; the sanitized transaction record is in
+[Testnet Gateway](testnet-gateway.md#exact-tagged-source-funded-run).
 
 The gateway is an integration target, not a wallet, custodian, faucet,
 facilitator, mainnet service, or availability commitment.
