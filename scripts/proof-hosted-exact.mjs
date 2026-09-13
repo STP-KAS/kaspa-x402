@@ -39,6 +39,7 @@ import {
   writePrivateProofJson,
 } from "./proof-output-security.mjs";
 import { readBoundedResponseText } from "./read-bounded-response.mjs";
+import { transactionInputOutpoint } from "./transaction-input-outpoint.mjs";
 
 const DEFAULT_GATEWAY_URL = "https://demo.kaspa-x402.org";
 const DEFAULT_CONFIRMATION_TIMEOUT_MS = 120_000;
@@ -756,13 +757,10 @@ function exactPaymentArtifact(
 
 function exactTransactionInputOutpoints(transaction) {
   return transaction.serializeToObject().inputs.map((input) => {
-    const outpoint = input.previousOutpoint ?? input.utxo?.outpoint;
+    const outpoint = transactionInputOutpoint(input);
     if (!outpoint)
       throw new Error("signed exact transaction input is missing its outpoint");
-    return {
-      txid: String(outpoint.transactionId),
-      index: Number(outpoint.index),
-    };
+    return outpoint;
   });
 }
 

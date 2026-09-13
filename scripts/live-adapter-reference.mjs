@@ -9,6 +9,7 @@ import {
   DirectModeClient,
   MemoryChannelStore,
   PAYMENT_REQUIRED_HEADER,
+  PAYMENT_RESPONSE_HEADER,
   PAYMENT_SIGNATURE_HEADER,
 } from "@kaspa-x402/client";
 import {
@@ -49,6 +50,7 @@ import {
   MemoryServerChannelStore,
 } from "@kaspa-x402/server";
 import { sanitizeProofOutputText } from "./proof-output-security.mjs";
+import { transactionInputOutpoint } from "./transaction-input-outpoint.mjs";
 
 // Reference adapter for scripts/proof-live-testnet.mjs. It is testnet-only,
 // spends testnet funds, and writes local signing/recovery material under
@@ -70,6 +72,7 @@ const BATCH_REQUEST_AMOUNT = "100000000";
 const BATCH_DEPOSIT_AMOUNT = "400000000";
 const BATCH_TOP_UP_REQUEST_AMOUNT = "298000000";
 const FUNDING_SPLIT_SHARDS = 16;
+const MIN_REUSABLE_FUNDING_SHARDS = 8;
 const FUNDING_SPLIT_SHARD_AMOUNT = 500_000_000n;
 const SDK_GENERATED_TX_VERSION_SOURCE = "sdk-generated-transaction";
 const ADAPTER_SUBMITTED_TX_VERSION_SOURCE =
@@ -407,8 +410,24 @@ export async function runLiveProof(context) {
         refundTimeoutDaa: initialRefundTimeoutDaa,
       },
     };
-    let flow = "exact";
+    let flow = "hosted batch";
     try {
+      const hostedBatchGateway = process.env.KASPA_X402_HOSTED_BATCH_GATEWAY_URL;
+      if (hostedBatchGateway) {
+        report.hostedBatch = await runHostedBatchCanary({
+          gatewayBase: hostedBatchGateway,
+          expected: hostedBatchExpectationsFromEnv(),
+          network: context.network,
+          fundingProvider,
+          signer,
+          addressCodec,
+          fundingAddress,
+          schnorr,
+          batchRecovery,
+          clientStore,
+        });
+      }
+      flow = "exact";
       report.exact = {
         standardNativeTiny: await runExact({
           client,
@@ -1493,6 +1512,24 @@ async function createFundingSplit({
   fundingAddress,
   spentOutpoints,
 }) {
+  const reusable = (await getAddressUtxos(rpc, fundingAddress))
+    .filter(
+      (utxo) =>
+        BigInt(utxo.amount) >= FUNDING_SPLIT_SHARD_AMOUNT &&
+        !spentOutpoints.has(outpointKey(utxo.outpoint)),
+    )
+    .slice(0, FUNDING_SPLIT_SHARDS);
+  if (reusable.length >= MIN_REUSABLE_FUNDING_SHARDS) {
+    return {
+      reusedExisting: true,
+      requestedShards: FUNDING_SPLIT_SHARDS,
+      shardAmountSompi: FUNDING_SPLIT_SHARD_AMOUNT.toString(),
+      observedOutputs: reusable.map((utxo) => ({
+        outpoint: utxo.outpoint,
+        amount: utxo.amount,
+      })),
+    };
+  }
   const sent = await sendFromFunding({
     rpc,
     sdk,
@@ -1838,6 +1875,246 @@ function verifyRequestAuthorization({
     inputIndex: authorization.inputIndex,
     publicKey: fundingPublicKey,
   };
+}
+
+function hostedBatchExpectationsFromEnv() {
+  const expected = {
+    releaseVersion: process.env.KASPA_X402_EXPECTED_RELEASE_VERSION,
+    amount: process.env.KASPA_X402_EXPECTED_BATCH_AMOUNT,
+    minDepositSompi: process.env.KASPA_X402_EXPECTED_MIN_DEPOSIT_SOMPI,
+    payTo: process.env.KASPA_X402_EXPECTED_BATCH_PAY_TO,
+    serverPublicKey: process.env.KASPA_X402_EXPECTED_SERVER_PUBLIC_KEY,
+  };
+  const missing = Object.entries(expected)
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+  if (missing.length > 0) {
+    throw new Error(
+      `hosted batch canary is missing operator pins: ${missing.join(", ")}`,
+    );
+  }
+  return expected;
+}
+
+async function runHostedBatchCanary(input) {
+  const batchUrl = new URL("/batch", input.gatewayBase).toString();
+  const gatewayOrigin = new URL(batchUrl).origin;
+  const healthResponse = await fetch(new URL("/health", input.gatewayBase));
+  const health = await healthResponse.json();
+  if (
+    healthResponse.status !== 200 ||
+    health?.ok !== true ||
+    health?.enabled !== true ||
+    health?.releaseVersion !== input.expected.releaseVersion
+  ) {
+    throw new Error("hosted batch gateway health does not match operator pins");
+  }
+
+  const firstRequired = await fetchHostedPaymentRequired(batchUrl);
+  const required = decodePaymentRequiredHeader(firstRequired);
+  const offers = required.accepts.filter(
+    (entry) => entry.scheme === "batch-settlement",
+  );
+  if (offers.length !== 1)
+    throw new Error("hosted batch route must advertise exactly one batch offer");
+  const accepted = offers[0];
+  if (
+    required.resource.url !== batchUrl ||
+    new URL(required.resource.url).origin !== gatewayOrigin ||
+    accepted.network !== input.network ||
+    accepted.amount !== input.expected.amount ||
+    accepted.payTo !== input.expected.payTo ||
+    accepted.extra.binding !== "kaspa-escrow-v3" ||
+    accepted.extra.templateId !== "kaspa-x402-escrow-v4" ||
+    accepted.extra.minDepositSompi !== input.expected.minDepositSompi ||
+    accepted.extra.serverPublicKey !== input.expected.serverPublicKey
+  ) {
+    throw new Error("hosted batch offer does not match operator pins");
+  }
+
+  const virtualDaa = BigInt(await input.fundingProvider.getVirtualDaaScore());
+  const refundHorizon = BigInt(accepted.extra.refundTimeoutDaa) - virtualDaa;
+  if (refundHorizon < 1n || refundHorizon > 40_000n)
+    throw new Error("hosted batch refund horizon is outside the operator cap");
+
+  const hostedStore = new MemoryChannelStore();
+  input.batchRecovery.clientStore = hostedStore;
+  const client = new DirectModeClient({
+    fundingProvider: input.fundingProvider,
+    signer: input.signer,
+    store: hostedStore,
+    addressCodec: input.addressCodec,
+    refundAddress: input.fundingAddress,
+    fundingPolicy: {
+      requiredSource: "hot-wallet",
+      batchPayment: {
+        maximumBatchChargeSompi: input.expected.amount,
+        maximumInitialDepositSompi: input.expected.minDepositSompi,
+        maximumTopUpSompi: input.expected.minDepositSompi,
+        maximumCumulativeAuthorizationSompi: input.expected.minDepositSompi,
+        maximumTotalExposureSompi: input.expected.minDepositSompi,
+        minimumRefundLeadDaa: "1",
+        maximumRefundHorizonDaa: "40000",
+        allowedOrigins: [gatewayOrigin],
+        allowedResources: [batchUrl],
+        allowedPayTo: [input.expected.payTo],
+        allowedServerPublicKeys: [input.expected.serverPublicKey],
+        allowedFundingSources: ["hot-wallet"],
+      },
+    },
+    supportedNetworks: [input.network],
+    supportedSchemes: ["batch-settlement"],
+    confirmationThreshold: CONFIRMATION_THRESHOLD,
+    verifyVoucherSignature(voucher, channel) {
+      const digest = voucherDigest({
+        network: channel.config.network,
+        covenantId: channel.covenantId,
+        authorizedCumulativeAmount: voucher.authorizedCumulativeAmount,
+      });
+      return input.schnorr.verify(
+        hexToBytes(voucher.signature, { expectedLength: 64 }),
+        hexToBytes(digest, { expectedLength: 32 }),
+        hexToBytes(channel.clientPublicKey, { expectedLength: 32 }),
+      );
+    },
+  });
+
+  const deposit = await createHostedBatchPayment({
+    client,
+    batchUrl,
+    requiredHeader: firstRequired,
+    paymentIdentifier: `hosted-batch-deposit-${Date.now()}`,
+  });
+  if (
+    deposit.payment.openedChannel !== true ||
+    deposit.payment.paymentPayload.payload.type !== "deposit-voucher"
+  ) {
+    throw new Error("hosted batch deposit did not open a channel");
+  }
+  const depositChannel = await client.applySettlement(
+    deposit.payment,
+    deposit.settlement,
+  );
+
+  const voucher = await createHostedBatchPayment({
+    client,
+    batchUrl,
+    requiredHeader: await fetchHostedPaymentRequired(batchUrl),
+    paymentIdentifier: `hosted-batch-voucher-${Date.now()}`,
+  });
+  if (
+    voucher.payment.openedChannel !== false ||
+    voucher.payment.paymentPayload.payload.type !== "voucher"
+  ) {
+    throw new Error("hosted batch follow-up did not use a voucher");
+  }
+  const voucherChannel = await client.applySettlement(
+    voucher.payment,
+    voucher.settlement,
+  );
+
+  const stale = await submitHostedBatchPayment(
+    batchUrl,
+    deposit.payment.paymentPayload,
+    402,
+  );
+  if (stale.body?.error !== "invalid_payment_requirements")
+    throw new Error("hosted batch stale replay was not corrective");
+  input.batchRecovery.clientStore = input.clientStore;
+
+  return {
+    gatewayBase: gatewayOrigin,
+    releaseVersion: health.releaseVersion,
+    deposit: {
+      status: deposit.status,
+      transactionId: deposit.settlement.transaction,
+      channelId: depositChannel.channel.id,
+      openedChannel: true,
+      chargedCumulativeAmount: depositChannel.channel.chargedCumulativeAmount,
+    },
+    voucher: {
+      status: voucher.status,
+      transactionId: voucher.settlement.transaction,
+      openedChannel: false,
+      chargedCumulativeAmount: voucherChannel.channel.chargedCumulativeAmount,
+    },
+    staleReplay: {
+      status: stale.status,
+      error: stale.body.error,
+    },
+  };
+}
+
+async function createHostedBatchPayment(input) {
+  const payment = await input.client.createPayment(input.requiredHeader, {
+    url: input.batchUrl,
+    paymentIdentifier: input.paymentIdentifier,
+  });
+  const response = await submitHostedBatchPayment(
+    input.batchUrl,
+    payment.paymentPayload,
+    200,
+  );
+  const header = response.headers.get(PAYMENT_RESPONSE_HEADER);
+  if (!header) throw new Error("hosted batch response is missing settlement");
+  return {
+    payment,
+    settlement: decodePaymentResponseHeader(header),
+    status: response.status,
+  };
+}
+
+async function fetchHostedPaymentRequired(url) {
+  const response = await fetch(url, { redirect: "error" });
+  if (response.status !== 402 || response.url !== url)
+    throw new Error(`hosted batch challenge returned ${response.status}`);
+  const header = response.headers.get(PAYMENT_REQUIRED_HEADER);
+  if (!header) throw new Error("hosted batch challenge is missing payment terms");
+  return header;
+}
+
+async function submitHostedBatchPayment(url, paymentPayload, expectedStatus) {
+  const attempts = expectedStatus === 200 ? 60 : 1;
+  const presentationExpiry = Date.parse(
+    paymentPayload?.payload?.presentation?.expiresAt ?? "",
+  );
+  let last;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "error",
+      headers: {
+        [PAYMENT_SIGNATURE_HEADER]: encodePaymentSignatureHeader(paymentPayload),
+      },
+    });
+    const text = await response.text();
+    let body;
+    try {
+      body = text ? JSON.parse(text) : undefined;
+    } catch {
+      body = undefined;
+    }
+    last = { status: response.status, headers: response.headers, body };
+    if (response.status === expectedStatus) return last;
+    if (
+      expectedStatus === 200 &&
+      (response.status === 402 ||
+        response.status === 503 ||
+        response.status === 504) &&
+      body?.error !== "invalid_payload" &&
+      body?.error !== "invalid_signature" &&
+      body?.error !== "invalid_payment_requirements" &&
+      (!Number.isFinite(presentationExpiry) ||
+        Date.now() + 2_000 < presentationExpiry)
+    ) {
+      await sleep(2_000);
+      continue;
+    }
+    break;
+  }
+  throw new Error(
+    `hosted batch payment expected ${expectedStatus}, got ${last?.status}: ${JSON.stringify(last?.body)}`,
+  );
 }
 
 async function runBatch(input) {
@@ -2376,18 +2653,32 @@ async function buildPreparedGenesis(input) {
   } = input;
   const requestedMinimum = BigInt(request.amount);
   const fee = DEFAULT_FEE_SOMPI;
-  const funding = await selectFundingUtxo(
+  const requiredInputAmount = requestedMinimum + fee;
+  let funding = await selectFundingUtxo(
     rpc,
     fundingAddress,
-    requestedMinimum + fee,
+    requiredInputAmount,
     spentOutpoints,
   );
-  const escrowAmount = BigInt(funding.amount) - fee;
-  if (escrowAmount < requestedMinimum) {
-    throw new Error(
-      "selected batch genesis input is below the requested minimum plus fee",
-    );
+  if (BigInt(funding.amount) > requiredInputAmount) {
+    const split = await sendFromFunding({
+      rpc,
+      sdk,
+      networkId: kaspaNetworkId(network),
+      fundingPrivateKey: new sdk.PrivateKey(fundingPrivateKeyHex),
+      fundingAddress,
+      spentOutpoints,
+      entries: [funding.raw],
+      outputs: [{ address: fundingAddress, amount: requiredInputAmount }],
+    });
+    funding = await waitForAddressOutpoint({
+      rpc,
+      address: fundingAddress,
+      txid: split.txid,
+      amount: requiredInputAmount,
+    });
   }
+  const escrowAmount = requestedMinimum;
   const fundingScriptPublicKey = funding.scriptPublicKey;
   const params = escrowParamsFromChannelConfig(
     request.channelConfig,
@@ -4437,9 +4728,9 @@ async function selectFundingUtxo(
         !spentOutpoints?.has(outpointKey(utxo.outpoint)),
     )
     .sort((left, right) =>
-      BigInt(left.amount) > BigInt(right.amount)
+      BigInt(left.amount) < BigInt(right.amount)
         ? -1
-        : BigInt(left.amount) < BigInt(right.amount)
+        : BigInt(left.amount) > BigInt(right.amount)
           ? 1
           : 0,
     );
@@ -5417,17 +5708,6 @@ function entryOutpointKey(entry) {
     txid: String(outpoint.transactionId),
     index: Number(outpoint.index),
   });
-}
-
-function transactionInputOutpoint(input) {
-  const outpoint = input.previousOutpoint ?? input.utxo?.outpoint;
-  const txid = outpoint?.transactionId ?? input.transactionId;
-  const index = outpoint?.index ?? input.index;
-  if (txid === undefined || index === undefined) return undefined;
-  return {
-    txid: String(txid),
-    index: Number(index),
-  };
 }
 
 function hash(value) {

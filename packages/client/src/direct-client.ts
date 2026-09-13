@@ -1270,12 +1270,12 @@ export class DirectModeClient {
       );
     }
     if (
-      parseSompiString(prepared.successor.amount) <
+      parseSompiString(prepared.successor.amount) !==
       parseSompiString(initialFundingAmount)
     ) {
       throw new KaspaX402Error(
         "invalid_kaspa_x402_amount",
-        "prepared genesis amount is below the required funding target",
+        "prepared genesis amount must equal the authorized funding target",
       );
     }
     const attempt: FundingTransitionAttemptRecord = {

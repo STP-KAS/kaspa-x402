@@ -107,6 +107,10 @@ async function smokeGateway(baseUrl) {
     exactRequired.accepts[0]?.extra?.profile === "standard-native",
     "exact offer profile changed",
   );
+  assert(
+    exactRequired.accepts[0]?.maxTimeoutSeconds === 300,
+    "exact offer timeout is too short for funded Testnet settlement",
+  );
   assert(batch.status === 402, `expected batch 402, got ${batch.status}`);
   assert(
     batchRequired.accepts[0]?.scheme === "batch-settlement",
@@ -123,6 +127,10 @@ async function smokeGateway(baseUrl) {
   assert(
     batchRequired.accepts[0]?.extra?.claimReserveSompi === "10000000",
     "batch offer did not advertise the v1 RC1 claim reserve",
+  );
+  assert(
+    batchRequired.accepts[0]?.maxTimeoutSeconds === 300,
+    "batch offer timeout is too short for funded Testnet settlement",
   );
   assert(
     unsupported.status === 402 &&
