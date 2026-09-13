@@ -1167,7 +1167,7 @@ describe("KaspaPnnClient", () => {
     });
   });
 
-  it("discovers one confirmed covenant successor through selected-chain V2", async () => {
+  it("discovers a confirmed covenant successor while the selected-chain tip advances", async () => {
     const current = batchChannel({});
     const fixture = pnnLineageFixture(current);
     const update = await new KaspaPnnClient({
@@ -2329,14 +2329,20 @@ function pnnLineageFixture(
   headerHash?: string,
   flattenedInputCovenantId?: string,
 ) {
-  const checkpoint = {
+  const proofCheckpoint = {
     blockHash: "f0".repeat(32),
     blueScore: "1100",
     daaScore: "1100",
   };
+  const checkpoint = {
+    blockHash: "f5".repeat(32),
+    blueScore: "1105",
+    daaScore: "1105",
+  };
   const acceptingBlockHash = "f1".repeat(32);
   const transactionId = "f2".repeat(32);
   const successorScript = "0000" + "f3".repeat(34);
+  let checkpointCalls = 0;
   let selectedCalls = 0;
   const successor = {
     value: "900",
@@ -2359,18 +2365,29 @@ function pnnLineageFixture(
       throw new Error("unused");
     },
     async getBlockDagInfo() {
-      return { sink: checkpoint.blockHash };
+      checkpointCalls += 1;
+      return {
+        sink: checkpointCalls === 1
+          ? proofCheckpoint.blockHash
+          : checkpoint.blockHash,
+      };
     },
     async getBlock({ hash, includeTransactions }) {
-      expect(hash).toBe(checkpoint.blockHash);
+      expect([proofCheckpoint.blockHash, checkpoint.blockHash]).toContain(hash);
       expect(includeTransactions).toBe(false);
+      const requestedCheckpoint = hash === proofCheckpoint.blockHash
+        ? proofCheckpoint
+        : checkpoint;
       return {
         block: {
           header: {
-            blueScore: checkpoint.blueScore,
-            daaScore: checkpoint.daaScore,
+            blueScore: requestedCheckpoint.blueScore,
+            daaScore: requestedCheckpoint.daaScore,
           },
-          verboseData: { hash: checkpoint.blockHash },
+          verboseData: {
+            hash: requestedCheckpoint.blockHash,
+            isChainBlock: true,
+          },
         },
       };
     },
