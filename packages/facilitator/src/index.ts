@@ -1,4 +1,7 @@
 import {
+  KASPA_X402_RESOURCE_BUDGET,
+  assertJsonResourceBudget,
+  decodeBoundedJsonBytes,
   isFacilitatorRequest,
   isKaspaX402Network,
   assertMainnetAllowed,
@@ -9,6 +12,7 @@ import {
   type SettlementResponse,
   type SupportedKind,
   type SupportedResponse,
+  type TrustedSecurityContext,
   type VerifyResponse,
 } from "@kaspa-x402/core";
 import { KaspaX402Error } from "@kaspa-x402/core";
@@ -30,6 +34,7 @@ export interface FacilitatorConfig {
 export interface FacilitatorActionContext {
   facilitator: DirectModeFacilitator;
   server: DirectModeServer;
+  trustedSecurityContext?: TrustedSecurityContext;
 }
 
 export type FacilitatorActionSettler = (
@@ -40,7 +45,10 @@ export type FacilitatorActionSettler = (
 export interface FacilitatorHttpRequest {
   method: string;
   path: string;
+  /** Parsed JSON or bounded raw UTF-8 JSON bytes. */
   body?: unknown;
+  /** Host-derived normalized claims, never a value read from body. */
+  trustedSecurityContext?: TrustedSecurityContext;
 }
 
 export interface FacilitatorHttpResponse {
@@ -67,14 +75,19 @@ export class DirectModeFacilitator {
     };
   }
 
-  async verify(input: unknown): Promise<VerifyResponse> {
+  async verify(
+    input: unknown,
+    trustedSecurityContext?: TrustedSecurityContext,
+  ): Promise<VerifyResponse> {
     if (!isFacilitatorRequest(input)) {
       return invalidVerify("invalid_kaspa_x402_payload");
     }
     const unsupportedReason = this.#unsupportedReason(input, "verify");
     if (unsupportedReason) return invalidVerify(unsupportedReason);
     try {
-      const verification = await this.#config.server.verifyPayment(input);
+      const verification = await this.#config.server.verifyPayment(
+        facilitatorServerOptions(input, trustedSecurityContext),
+      );
       return {
         isValid: true,
         ...(verification.payer ? { payer: verification.payer } : {}),
@@ -85,7 +98,10 @@ export class DirectModeFacilitator {
     }
   }
 
-  async settle(input: unknown): Promise<SettleResponse> {
+  async settle(
+    input: unknown,
+    trustedSecurityContext?: TrustedSecurityContext,
+  ): Promise<SettleResponse> {
     if (!isFacilitatorRequest(input)) {
       return invalidSettlement("invalid_kaspa_x402_payload");
     }
@@ -100,13 +116,30 @@ export class DirectModeFacilitator {
       const actionSettler = this.#actionSettler(mode);
       if (!actionSettler) return invalidSettlement("unsupported_kaspa_facilitator_action", network);
       try {
-        return await actionSettler(input, { facilitator: this, server: this.#config.server });
+        const payload = input.paymentPayload.payload;
+        const channelKey =
+          isRecord(payload) && typeof payload.channelId === "string"
+            ? payload.channelId
+            : undefined;
+        return await this.#config.server.runPublicAdapter(
+          `facilitator-${mode}-settler`,
+          trustedSecurityContext,
+          channelKey,
+          () =>
+            actionSettler(input, {
+              facilitator: this,
+              server: this.#config.server,
+              ...(trustedSecurityContext ? { trustedSecurityContext } : {}),
+            }),
+        );
       } catch (error) {
         return invalidSettlement(errorCode(error), network);
       }
     }
     try {
-      return await this.#config.server.settlePayment(input);
+      return await this.#config.server.settlePayment(
+        facilitatorServerOptions(input, trustedSecurityContext),
+      );
     } catch (error) {
       return invalidSettlement(errorCode(error), network);
     }
@@ -130,6 +163,19 @@ export class DirectModeFacilitator {
   }
 }
 
+function facilitatorServerOptions(
+  input: FacilitatorRequest,
+  trustedSecurityContext?: TrustedSecurityContext,
+) {
+  return {
+    paymentPayload: input.paymentPayload,
+    paymentRequirements: input.paymentRequirements,
+    ...(input.resource ? { resource: input.resource } : {}),
+    ...(input.requestHash ? { requestHash: input.requestHash } : {}),
+    ...(trustedSecurityContext ? { trustedSecurityContext } : {}),
+  };
+}
+
 export async function handleFacilitatorRequest(
   facilitator: DirectModeFacilitator,
   request: FacilitatorHttpRequest,
@@ -141,20 +187,135 @@ export async function handleFacilitatorRequest(
     return jsonResponse(200, facilitator.supported());
   }
   if (method === "POST" && path === "/verify") {
-    if (!isFacilitatorRequest(request.body)) {
+    const input = facilitatorBody(request.body);
+    if (!isFacilitatorRequest(input)) {
       return jsonResponse(400, invalidVerify("invalid_kaspa_x402_payload"));
     }
-    const body = await facilitator.verify(request.body);
+    const body = await facilitator.verify(
+      input,
+      request.trustedSecurityContext,
+    );
     return jsonResponse(200, body);
   }
   if (method === "POST" && path === "/settle") {
-    if (!isFacilitatorRequest(request.body)) {
+    const input = facilitatorBody(request.body);
+    if (!isFacilitatorRequest(input)) {
       return jsonResponse(400, invalidSettlement("invalid_kaspa_x402_payload"));
     }
-    const body = await facilitator.settle(request.body);
+    const body = await facilitator.settle(
+      input,
+      request.trustedSecurityContext,
+    );
     return jsonResponse(200, body);
   }
   return jsonResponse(404, { error: "not_found" });
+}
+
+export interface FacilitatorBodyReadOptions {
+  /** Overall stream deadline. Defaults to 10 seconds. */
+  timeoutMs?: number;
+}
+
+const DEFAULT_FACILITATOR_BODY_TIMEOUT_MS = 10_000;
+
+/** Read an embedding Request without materializing more than the shared limit. */
+export async function readFacilitatorRequestBody(request: {
+  body: ReadableStream<Uint8Array> | null;
+  headers: { get(name: string): string | null };
+  signal?: AbortSignal;
+}, options: FacilitatorBodyReadOptions = {}): Promise<unknown> {
+  const maximum = KASPA_X402_RESOURCE_BUDGET.maxDecodedHeaderBytes;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_FACILITATOR_BODY_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new KaspaX402Error(
+      "invalid_kaspa_x402_payload",
+      "facilitator request body timeout must be a positive safe integer",
+    );
+  }
+  const declared = request.headers.get("content-length");
+  if (
+    declared !== null &&
+    (!/^\d+$/.test(declared) || Number(declared) > maximum)
+  )
+    throw new KaspaX402Error(
+      "invalid_kaspa_x402_payload",
+      `facilitator request body exceeds decoded limit ${maximum} bytes`,
+    );
+  if (!request.body)
+    throw new KaspaX402Error(
+      "invalid_kaspa_x402_payload",
+      "facilitator request body is required",
+    );
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let abortHandler: (() => void) | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(
+        new KaspaX402Error(
+          "invalid_kaspa_x402_payload",
+          `facilitator request body timed out after ${timeoutMs}ms`,
+        ),
+      );
+    }, timeoutMs);
+  });
+  const aborted = new Promise<never>((_, reject) => {
+    abortHandler = () => {
+      reject(
+        new KaspaX402Error(
+          "invalid_kaspa_x402_payload",
+          "facilitator request body was aborted",
+        ),
+      );
+    };
+    if (request.signal?.aborted) abortHandler();
+    else request.signal?.addEventListener("abort", abortHandler, { once: true });
+  });
+  try {
+    while (true) {
+      const chunk = await Promise.race([reader.read(), deadline, aborted]);
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > maximum) {
+        throw new KaspaX402Error(
+          "invalid_kaspa_x402_payload",
+          `facilitator request body exceeds decoded limit ${maximum} bytes`,
+        );
+      }
+      chunks.push(chunk.value);
+    }
+  } catch (error) {
+    void reader.cancel(error).catch(() => undefined);
+    throw error;
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    if (abortHandler) request.signal?.removeEventListener("abort", abortHandler);
+    try {
+      reader.releaseLock();
+    } catch {
+      // Cancellation still owns a pending read; the stream will release it.
+    }
+  }
+  const raw = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    raw.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return decodeBoundedJsonBytes(raw, "facilitator request body");
+}
+
+function facilitatorBody(body: unknown): unknown {
+  try {
+    if (typeof body === "string" || body instanceof Uint8Array)
+      return decodeBoundedJsonBytes(body, "facilitator request body");
+    assertJsonResourceBudget(body, { label: "facilitator request body" });
+    return body;
+  } catch {
+    return undefined;
+  }
 }
 
 function executableKinds(kinds: SupportedKind[], config: FacilitatorConfig): SupportedKind[] {

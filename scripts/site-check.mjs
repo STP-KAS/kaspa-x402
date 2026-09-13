@@ -35,7 +35,7 @@ const siteScriptFiles = [
 ];
 const releaseSnapshotScope =
   "schemas, specs, covenant artifacts, selected docs, vectors, package metadata, and release metadata";
-const activeAlphaOnlyRoutes = [
+const activePrereleaseOnlyRoutes = [
   "/",
   "/demo/",
   "/assets/",
@@ -159,17 +159,18 @@ function checkMetadataFreshness() {
   if (release.snapshotScope !== releaseSnapshotScope)
     fail("release snapshot scope is stale");
   if (
-    JSON.stringify(manifest.activeAlphaOnlyRoutes) !==
-    JSON.stringify(activeAlphaOnlyRoutes)
+    JSON.stringify(manifest.activePrereleaseOnlyRoutes) !==
+    JSON.stringify(activePrereleaseOnlyRoutes)
   )
-    fail("site-manifest active-alpha routes are stale");
+    fail("site-manifest active-prerelease routes are stale");
   if (
-    JSON.stringify(release.activeAlphaOnlyRoutes) !==
-    JSON.stringify(activeAlphaOnlyRoutes)
+    JSON.stringify(release.activePrereleaseOnlyRoutes) !==
+    JSON.stringify(activePrereleaseOnlyRoutes)
   )
-    fail("release active-alpha routes are stale");
+    fail("release active-prerelease routes are stale");
   if (
-    JSON.stringify(release.npmInstall) !== JSON.stringify(releaseNpmInstall())
+    JSON.stringify(release.npmInstall) !==
+    JSON.stringify(releaseNpmInstall(manifest.releaseVersion))
   )
     fail("release npm install metadata is stale");
   if (JSON.stringify(manifest.packages) !== JSON.stringify(publicPackages))
@@ -264,7 +265,7 @@ function checkReleaseSnapshots(manifest, dirtyInputs, headersPath) {
       assertContains(headersPath, route, `immutable release header ${route}`);
     }
 
-    checkActiveAlphaExclusions(releasePath);
+    checkActivePrereleaseExclusions(releasePath);
     if (releasePath !== manifest.releasePath || dirtyInputs.length === 0) {
       assertSameTree(
         path.join(root, RELEASE_SNAPSHOT_DIR, releasePath),
@@ -384,15 +385,15 @@ function checkAssetAllowlist() {
   );
 }
 
-function checkActiveAlphaExclusions(releasePath) {
-  for (const route of activeAlphaOnlyRoutes) {
+function checkActivePrereleaseExclusions(releasePath) {
+  for (const route of activePrereleaseOnlyRoutes) {
     if (route === "/") continue;
     const relative = route.replace(/^\/|\/$/g, "");
     if (!relative) continue;
     const candidate = path.join(outDir, releasePath, relative);
     if (fs.existsSync(candidate))
       fail(
-        `active-alpha route included in release snapshot: ${releasePath}/${relative}`,
+        `active-prerelease route included in release snapshot: ${releasePath}/${relative}`,
       );
   }
 }
@@ -453,6 +454,7 @@ function checkContent() {
     /Alpha\.6 focuses on preferred KIP-10/i,
     /For real paid requests, use the hosted gateway/i,
     /remains the paid-canary-proven alpha\.\d+ deployment until/i,
+    /paid-canary-proven Alpha\.11/i,
   ];
   for (const file of activeTextFiles) {
     const relative = path.relative(outDir, file).replaceAll(path.sep, "/");
@@ -463,15 +465,41 @@ function checkContent() {
     }
   }
 
-  for (const relative of [
-    "index.html",
-    "demo/index.html",
-    "docs/testnet-gateway.md",
+  for (const relative of ["index.html", "demo/index.html"]) {
+    assertContains(
+      path.join(outDir, relative),
+      "funded deployment proof is pending",
+      `${relative} v1 RC1 pending deployment proof`,
+    );
+  }
+  assertContains(
+    path.join(outDir, "docs/testnet-gateway.md"),
+    "Historical Alpha.10 Evidence",
+    "docs/testnet-gateway.md historical deployment boundary",
+  );
+  assertContains(
+    path.join(outDir, "docs/testnet-gateway.md"),
+    "Status: v1 RC1 deployment candidate",
+    "docs/testnet-gateway.md v1 RC1 pending deployment proof",
+  );
+  for (const [relative, marker] of [
+    ["docs/live-testnet-report.md", "successful `1.0.0-rc.1` funded live harness run"],
+    ["docs/demo-implementer-guide.md", "public registry and gateway remain Alpha.10"],
   ]) {
     assertContains(
       path.join(outDir, relative),
-      "paid-canary",
-      `${relative} current-alpha paid-canary evidence`,
+      marker,
+      `${relative} release evidence boundary`,
+    );
+  }
+  for (const [relative, marker] of [
+    ["docs/release-publish.md", "is a local release candidate"],
+    ["docs/demo-interop-checklist.md", "v1 RC1 deployment proof is pending"],
+  ]) {
+    assertContains(
+      path.join(root, relative),
+      marker,
+      `${relative} Alpha.10 evidence boundary`,
     );
   }
 
@@ -481,7 +509,7 @@ function checkContent() {
   assertContains(home, "Payment schemes", "homepage scheme heading");
   assertContains(
     home,
-    "kaspa-batch-settlement-v2",
+    "kaspa-batch-settlement-v3",
     "homepage active batch specification",
   );
   assertNotContains(
@@ -492,11 +520,11 @@ function checkContent() {
   assertContains(
     path.join(outDir, "demo/index.html"),
     "Current Lane And Voucher",
-    "browser demo exposes Alpha.10 batch lane state",
+    "browser demo exposes v1 RC1 batch lane state",
   );
   assertContains(
     path.join(outDir, "assets/demo.js"),
-    'binding: "kaspa-escrow-v2"',
+    'binding: "kaspa-escrow-v3"',
     "browser demo uses active escrow binding",
   );
   for (const stale of [
@@ -801,18 +829,26 @@ function sha256File(file) {
     .digest("hex");
 }
 
-function releaseNpmInstall() {
-  return PUBLISHABLE_PACKAGES.map((name) => `${name}@alpha`);
+function releaseNpmInstall(version) {
+  return PUBLISHABLE_PACKAGES.map((name) => `${name}@${version}`);
 }
 
 function lockedReleaseMetadata(release) {
+  const activeRoutesMetadata =
+    "activePrereleaseOnlyRoutes" in release
+      ? {
+          activePrereleaseOnlyRoutes: release.activePrereleaseOnlyRoutes,
+        }
+      : {
+          activeAlphaOnlyRoutes: release.activeAlphaOnlyRoutes,
+        };
   return {
     version: release.version,
     sourceState: "locked",
     dirtyInputs: [],
     contentLock: release.contentLock,
     snapshotScope: release.snapshotScope,
-    activeAlphaOnlyRoutes: release.activeAlphaOnlyRoutes,
+    ...activeRoutesMetadata,
     unversionedRoutes: release.unversionedRoutes,
     npmInstall: release.npmInstall,
     artifacts: release.artifacts,

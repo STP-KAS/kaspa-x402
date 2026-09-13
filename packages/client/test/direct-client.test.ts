@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  MCP_PAYMENT_META_KEY,
   MCP_PAYMENT_RESPONSE_META_KEY,
+  KASPA_X402_RESOURCE_BUDGET,
   X402_VERSION,
+  bindRequestHashToTrustedContext,
   encodePaymentRequiredEnvelopeHeader,
   encodePaymentRequiredHeader,
   encodePaymentResponseHeader,
@@ -13,18 +16,26 @@ import {
   mcpToolCallFingerprint,
   paymentIdentifierExtension,
   sha256Hex,
+  stableStringify,
+  trustedSecurityContextHash,
 } from "@kaspa-x402/core";
 import type {
+  AcceptedTransactionEvidence,
+  BatchPaymentAuthorizationIntent,
+  BatchPaymentAuthorizationPolicy,
   BatchPaymentRequirements,
   ChannelState,
+  CovenantSelectedChainUpdate,
   ExactPaymentRequirements,
   Hash32Hex,
   KaspaPaymentPayload,
+  McpToolResult,
   NetworkId,
   PaymentPayload,
   PaymentRequired,
   PaymentScheme,
   SettlementResponse,
+  TrustedTransactionEvidence,
 } from "@kaspa-x402/core";
 import {
   buildKip10AdditiveRedeemScript,
@@ -35,6 +46,8 @@ import {
 import {
   DirectModeClient,
   MemoryChannelStore,
+  PendingExactPaymentError,
+  PAYMENT_REQUIRED_HEADER,
   PAYMENT_RESPONSE_HEADER,
   PAYMENT_SIGNATURE_HEADER,
   paidMcpToolCall,
@@ -43,6 +56,8 @@ import {
   type DirectModeChannel,
   type EscrowDepositRequest,
   type ExactPaymentRequest,
+  type ExactPaymentAttemptRecord,
+  type ExactPaymentReconciler,
   type ExactTransactionPaymentRequest,
   type ExactTransactionPaymentResult,
   type FeeEstimateRequest,
@@ -81,8 +96,82 @@ const ADDITIVE_HEAD_SCRIPT_PUBLIC_KEY = serializedScriptPublicKey(
   payToScriptHashScript(ADDITIVE_HEAD_REDEEM_SCRIPT),
 );
 const EXACT_TRANSACTION_ARTIFACT = '{"transaction":"signed-kip10-exact"}';
+const CONFIRMATION_THRESHOLD = 30;
+
+function acceptedEvidence(
+  transactionId: string,
+  confirmationCount = CONFIRMATION_THRESHOLD,
+  acceptingBlockHash = sha256Hex(
+    `accepting-block:${transactionId.toLowerCase()}`,
+  ),
+): AcceptedTransactionEvidence {
+  const checkpointBlueScore = 1_000n;
+  return {
+    status: "accepted",
+    transactionId: transactionId.toLowerCase(),
+    acceptingBlockHash,
+    acceptingBlockBlueScore: (
+      checkpointBlueScore -
+      BigInt(confirmationCount) +
+      1n
+    ).toString(),
+    confirmationCount,
+    checkpoint: {
+      blockHash: "ef".repeat(32),
+      blueScore: checkpointBlueScore.toString(),
+      daaScore: "1000",
+    },
+  };
+}
+
+function unknownEvidence(transactionId: string, reason = "not yet indexed") {
+  return {
+    status: "unknown" as const,
+    transactionId: transactionId.toLowerCase(),
+    reason,
+  };
+}
+
+function absentEvidence(
+  transactionId: string,
+  reason = "authoritative rejection",
+) {
+  return {
+    status: "absent" as const,
+    transactionId: transactionId.toLowerCase(),
+    reason,
+    proof: {
+      kind: "consensus-rejection" as const,
+      rejectedTransactionId: transactionId.toLowerCase(),
+      rejectionCode: "CONSENSUS_REJECTED",
+      checkpoint: acceptedEvidence(transactionId).checkpoint,
+    },
+  };
+}
 
 describe("direct-mode client", () => {
+  it("normalizes schema-known challenge hex before authorization", () => {
+    const client = makeClient({});
+    const required = makeRequired({ amount: "100" });
+    const offered = required.accepts[0] as BatchPaymentRequirements;
+    offered.extra.serverPublicKey = offered.extra.serverPublicKey.toUpperCase();
+    offered.extra.securityContextHash =
+      offered.extra.securityContextHash.toUpperCase();
+
+    const parsed = client.selectPaymentRequirement(
+      encodePaymentRequiredHeader(required),
+    );
+
+    const accepted = parsed.accepted as BatchPaymentRequirements;
+    expect(accepted.extra.serverPublicKey).toBe(
+      offered.extra.serverPublicKey.toLowerCase(),
+    );
+    expect(accepted.extra.securityContextHash).toBe(
+      offered.extra.securityContextHash.toLowerCase(),
+    );
+    expect(parsed.paymentRequired.accepts[0]).toEqual(accepted);
+  });
+
   it("opens a deposit-voucher channel for the first paid request", async () => {
     const provider = new FakeFundingProvider();
     const store = new MemoryChannelStore();
@@ -134,6 +223,23 @@ describe("direct-mode client", () => {
     expect(provider.deposits).toHaveLength(0);
   });
 
+  it("rejects zero-value batch offers before invoking the funding adapter", async () => {
+    const provider = new FakeFundingProvider();
+    const client = makeClient({ provider });
+    const required = makeRequired({ amount: "0" });
+    const rawHeader = Buffer.from(JSON.stringify(required), "utf8").toString(
+      "base64",
+    );
+
+    await expect(
+      client.createPayment(rawHeader, {
+        url: "https://api.example.test/data",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_kaspa_x402_accepted" });
+    expect(provider.deposits).toHaveLength(0);
+    expect(provider.topUps).toHaveLength(0);
+  });
+
   it("reuses an active channel and signs a monotonic cumulative voucher", async () => {
     const provider = new FakeFundingProvider();
     const store = new MemoryChannelStore();
@@ -162,7 +268,8 @@ describe("direct-mode client", () => {
     expect(secondPayment.paymentPayload.payload.type).toBe("voucher");
     expect(provider.deposits).toHaveLength(1);
     expect(
-      voucherBearingPayload(secondPayment.paymentPayload).voucher.amount,
+      voucherBearingPayload(secondPayment.paymentPayload).voucher
+        .authorizedCumulativeAmount,
     ).toBe("175");
   });
 
@@ -185,9 +292,63 @@ describe("direct-mode client", () => {
     expect(topped.paymentPayload.payload.type).toBe("deposit-voucher");
     expect(provider.topUps).toEqual([{ targetFundingAmount: "2000" }]);
     expect(topped.channel?.covenantId).toBe(first.channel?.covenantId);
-    expect(voucherBearingPayload(topped.paymentPayload).voucher.amount).toBe(
-      "1050",
+    expect(
+      voucherBearingPayload(topped.paymentPayload).voucher
+        .authorizedCumulativeAmount,
+    ).toBe("1050");
+    await expect(
+      client.applySettlement(topped, makeSettlement(topped.channel!, "950")),
+    ).resolves.toMatchObject({
+      channel: {
+        chargedCumulativeAmount: "1050",
+        requiresDepositVoucher: false,
+      },
+    });
+  });
+
+  it("reopens a removed confirmed top-up as blocking recovery", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({ provider, store });
+    const first = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+      { url: "https://api.example.test/data" },
     );
+    await client.applySettlement(first, makeSettlement(first.channel!, "100"));
+    const topped = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "950" })),
+      { url: "https://api.example.test/data" },
+    );
+    const applied = await store.loadFundingTransitionAttempt(
+      topped.channel!.id,
+    );
+    expect(applied).toMatchObject({ kind: "top-up", status: "applied" });
+    const acceptingBlockHash = applied!.acceptance!.acceptingBlockHash;
+    provider.lineageDiscovery = (request) => ({
+      fromCheckpoint: request.lineage.checkpoint,
+      checkpoint: request.lineage.checkpoint,
+      continuity: "complete",
+      removedChainBlockHashes: [acceptingBlockHash],
+      addedChainBlocks: [],
+    });
+
+    await expect(
+      client.reconcileChannel(topped.channel!.id),
+    ).resolves.toMatchObject({
+      activeOutpoint: first.channel!.activeOutpoint,
+      status: "refundable",
+    });
+    await expect(
+      store.loadFundingTransitionAttempt(topped.channel!.id),
+    ).resolves.toMatchObject({
+      kind: "top-up",
+      status: "broadcast",
+      finality: "broadcast",
+      expectedChannel: { status: "refundable" },
+    });
+    await expect(
+      store.loadOpenFundingTransitionAttempts(),
+    ).resolves.toHaveLength(1);
   });
 
   it("tops up a lane before a voucher would consume its advertised claim reserve", async () => {
@@ -303,6 +464,57 @@ describe("direct-mode client", () => {
     });
   });
 
+  it("binds exact request authorization to typed trusted context", async () => {
+    const provider = new FakeFundingProvider();
+    const client = makeClient({ provider, store: new MemoryChannelStore() });
+    const required = makeExactRequired({ amount: "250" });
+    const accepted = required.accepts[0]!;
+    const context = {
+      principal: "user:alpha",
+      tenant: "tenant:one",
+      authorizationScopes: ["download"],
+      handlerState: { policyVersion: 3 },
+    };
+    const base = sha256Hex(
+      stableStringify({
+        method: "GET",
+        url: required.resource.url,
+        body: null,
+        paymentRequirementsHash: sha256Hex(stableStringify(accepted)),
+      }),
+    );
+    const payment = await client.createPayment(
+      encodePaymentRequiredHeader(required),
+      {
+        url: required.resource.url,
+        trustedSecurityContext: context,
+      },
+    );
+    const expected = bindRequestHashToTrustedContext(base, context);
+    expect(payment.paymentPayload.payload.type).toBe("exact-transaction");
+    expect(provider.exactPayments[0]?.requestHash).toBe(expected);
+  });
+
+  it("rejects a batch challenge for another trusted context before funding", async () => {
+    const provider = new FakeFundingProvider();
+    const client = makeClient({ provider, store: new MemoryChannelStore() });
+    const required = makeRequired({ amount: "100" });
+    const context = { principal: "user:alpha" };
+    const accepted = required.accepts[0] as BatchPaymentRequirements;
+    expect(accepted.extra.securityContextHash).not.toBe(
+      trustedSecurityContextHash(context),
+    );
+
+    await expect(
+      client.createPayment(encodePaymentRequiredHeader(required), {
+        url: required.resource.url,
+        trustedSecurityContext: context,
+      }),
+    ).rejects.toThrow("trusted request context");
+    expect(provider.deposits).toHaveLength(0);
+    expect(provider.sendCount).toBe(0);
+  });
+
   it("enforces static origin, profile, recipient, and amount pins before exact signing", async () => {
     const required = encodePaymentRequiredHeader(
       makeExactRequired({ amount: "250" }),
@@ -332,6 +544,222 @@ describe("direct-mode client", () => {
       ).rejects.toThrow(testCase.message);
       expect(provider.exactPayments).toHaveLength(0);
     }
+  });
+
+  it("enforces origin and recipient pins before batch funding", async () => {
+    const required = encodePaymentRequiredHeader(
+      makeRequired({ amount: "100" }),
+    );
+    const cases: FundingPolicy[] = [
+      { allowedOrigins: ["https://other.example"] },
+      { allowedPayTo: ["kaspatest:other"] },
+    ];
+
+    for (const fundingPolicy of cases) {
+      const provider = new FakeFundingProvider();
+      const client = makeClient({
+        provider,
+        store: new MemoryChannelStore(),
+        fundingPolicy,
+      });
+
+      await expect(
+        client.createPayment(required, {
+          url: "https://api.example.test/file",
+        }),
+      ).rejects.toThrow("funding policy");
+      expect(provider.deposits).toHaveLength(0);
+    }
+  });
+
+  it("requires a digest-bound payer approval before batch key or wallet work", async () => {
+    const provider = new FakeFundingProvider();
+    const signer = new FakeSigner();
+    provider.batchAuthorizationApproval = () => ({
+      intentDigest: "ff".repeat(32),
+    });
+    const client = makeClient({ provider, signer });
+
+    await expect(
+      client.createPayment(
+        encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+        { url: "https://api.example.test/data" },
+      ),
+    ).rejects.toThrow("does not bind");
+
+    expect(provider.batchAuthorizations).toHaveLength(1);
+    expect(provider.identityCount).toBe(0);
+    expect(provider.deposits).toHaveLength(0);
+    expect(provider.sendCount).toBe(0);
+    expect(signer.keyGenerationCount).toBe(0);
+    expect(signer.voucherSignCount).toBe(0);
+    expect(signer.presentationSignCount).toBe(0);
+  });
+
+  it.each(["payer authorization", "complete payer policy"])(
+    "fails closed when batch %s is absent",
+    async (missing) => {
+      const provider = new FakeFundingProvider();
+      if (missing === "payer authorization") {
+        Object.defineProperty(provider, "authorizeBatchPayment", {
+          value: undefined,
+        });
+      }
+      const client = makeClient({
+        provider,
+        useDefaultBatchPolicy: missing !== "complete payer policy",
+      });
+
+      expect(client.supportedSchemes()).toEqual(["exact"]);
+      await expect(
+        client.createPayment(
+          encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+          { url: "https://api.example.test/data" },
+        ),
+      ).rejects.toThrow("no supported Kaspa x402 requirement was offered");
+      expect(provider.batchAuthorizations).toHaveLength(0);
+      expect(provider.deposits).toHaveLength(0);
+      expect(provider.sendCount).toBe(0);
+    },
+  );
+
+  it.each([
+    ["charge", { maximumBatchChargeSompi: "99" }],
+    ["deposit", { maximumInitialDepositSompi: "999" }],
+    ["cumulative", { maximumCumulativeAuthorizationSompi: "99" }],
+    ["exposure", { maximumTotalExposureSompi: "999" }],
+    ["minimum refund lead", { minimumRefundLeadDaa: "901" }],
+    ["maximum refund horizon", { maximumRefundHorizonDaa: "900" }],
+  ])(
+    "rejects batch %s cap-plus-one before payer or signing effects",
+    async (_label, mutation) => {
+      const provider = new FakeFundingProvider();
+      const signer = new FakeSigner();
+      const client = makeClient({
+        provider,
+        signer,
+        fundingPolicy: {
+          batchPayment: {
+            ...defaultBatchPaymentPolicy(provider),
+            ...mutation,
+          },
+        },
+      });
+
+      await expect(
+        client.createPayment(
+          encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+          { url: "https://api.example.test/data" },
+        ),
+      ).rejects.toThrow();
+      expect(provider.batchAuthorizations).toHaveLength(0);
+      expect(provider.identityCount).toBe(0);
+      expect(provider.deposits).toHaveLength(0);
+      expect(provider.sendCount).toBe(0);
+      expect(signer.keyGenerationCount).toBe(0);
+      expect(signer.voucherSignCount).toBe(0);
+    },
+  );
+
+  it("authorizes current reconciled accounting before voucher and top-up work", async () => {
+    const provider = new FakeFundingProvider();
+    const signer = new FakeSigner();
+    const store = new MemoryChannelStore();
+    const client = makeClient({ provider, signer, store });
+    const first = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+      {
+        url: "https://api.example.test/data",
+        paymentIdentifier: "batch-open-000001",
+      },
+    );
+    await client.applySettlement(first, makeSettlement(first.channel!, "100"));
+    const second = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "75" })),
+      {
+        url: "https://api.example.test/data",
+        paymentIdentifier: "batch-charge-0002",
+      },
+    );
+    await client.applySettlement(second, makeSettlement(second.channel!, "75"));
+    await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "950" })),
+      {
+        url: "https://api.example.test/data",
+        paymentIdentifier: "batch-topup-0003",
+      },
+    );
+
+    expect(
+      provider.batchAuthorizations.map((intent) => intent.operation),
+    ).toEqual(["open", "charge", "top-up"]);
+    expect(provider.batchAuthorizations[0]).toMatchObject({
+      clientPublicKey: null,
+      channelId: null,
+      covenantId: null,
+      authorizedCumulativeBefore: "0",
+      authorizedCumulativeAfter: "100",
+      initialDepositSompi: "1000",
+      paymentIdentifier: "batch-open-000001",
+    });
+    expect(provider.batchAuthorizations[1]).toMatchObject({
+      clientPublicKey: CLIENT_KEY,
+      channelId: first.channel!.id,
+      covenantId: first.channel!.covenantId,
+      authorizedCumulativeBefore: "100",
+      authorizedCumulativeAfter: "175",
+      currentFundingSompi: "1000",
+      topUpSompi: "0",
+      paymentIdentifier: "batch-charge-0002",
+    });
+    expect(provider.batchAuthorizations[2]).toMatchObject({
+      authorizedCumulativeBefore: "175",
+      authorizedCumulativeAfter: "1125",
+      claimedCumulativeAmount: "0",
+      currentFundingSompi: "1000",
+      topUpSompi: "1000",
+      resultingFundingSompi: "2000",
+      resultingExposureSompi: "2000",
+      authoritativeCurrentDaa: "100",
+      refundDistanceDaa: "900",
+      paymentIdentifier: "batch-topup-0003",
+    });
+    expect(provider.topUps).toEqual([{ targetFundingAmount: "2000" }]);
+  });
+
+  it("rejects a top-up cap-plus-one before payer, builder, signer, or broadcast work", async () => {
+    const provider = new FakeFundingProvider();
+    const signer = new FakeSigner();
+    const client = makeClient({
+      provider,
+      signer,
+      fundingPolicy: {
+        batchPayment: {
+          ...defaultBatchPaymentPolicy(provider),
+          maximumTopUpSompi: "999",
+        },
+      },
+    });
+    const first = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+      { url: "https://api.example.test/data" },
+    );
+    await client.applySettlement(first, makeSettlement(first.channel!, "100"));
+    const authorizationCount = provider.batchAuthorizations.length;
+    const voucherCount = signer.voucherSignCount;
+    const presentationCount = signer.presentationSignCount;
+
+    await expect(
+      client.createPayment(
+        encodePaymentRequiredHeader(makeRequired({ amount: "950" })),
+        { url: "https://api.example.test/data" },
+      ),
+    ).rejects.toThrow("top-up exceeds payer cap");
+    expect(provider.batchAuthorizations).toHaveLength(authorizationCount);
+    expect(provider.topUps).toHaveLength(0);
+    expect(provider.sendCount).toBe(1);
+    expect(signer.voucherSignCount).toBe(voucherCount);
+    expect(signer.presentationSignCount).toBe(presentationCount);
   });
 
   it("creates the default standard-native exact transaction without head state", async () => {
@@ -636,6 +1064,23 @@ describe("direct-mode client", () => {
     expect(provider.exactPayments).toHaveLength(0);
   });
 
+  it("does not advertise or fund batch without authoritative lineage discovery", async () => {
+    const provider = new FakeFundingProvider();
+    Object.defineProperty(provider, "discoverCovenantLineage", {
+      value: undefined,
+    });
+    const client = makeClient({ provider, store: new MemoryChannelStore() });
+
+    expect(client.supportedSchemes()).toEqual(["exact"]);
+    await expect(
+      client.createPayment(
+        encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+        { url: "https://api.example.test/data" },
+      ),
+    ).rejects.toThrow("no supported Kaspa x402 requirement was offered");
+    expect(provider.deposits).toHaveLength(0);
+  });
+
   it("selects the supported Kaspa entry from an envelope with foreign scheme and network entries", async () => {
     const provider = new FakeFundingProvider();
     const client = makeClient({ provider, store: new MemoryChannelStore() });
@@ -745,7 +1190,7 @@ describe("direct-mode client", () => {
     ).rejects.toThrow("settlement profile");
   });
 
-  it("rejects exact settlement below the advertised finality", async () => {
+  it("treats merchant finality as acknowledgement only", async () => {
     const provider = new FakeFundingProvider();
     const client = makeClient({ provider, store: new MemoryChannelStore() });
     const payment = await client.createPayment(
@@ -767,9 +1212,14 @@ describe("direct-mode client", () => {
           exactProfile: "standard-native",
           paymentOutputIndex: 0,
           finality: "accepted",
+          requestHash: payment.paymentPayload.payload.requestHash,
         }),
       }),
-    ).rejects.toThrow("required finality");
+    ).resolves.toMatchObject({
+      chargedAmount: "250",
+      pending: true,
+      transactionId: EXACT_TX_ID,
+    });
   });
 
   it("rejects exact settlement with a mismatched request hash echo", async () => {
@@ -799,6 +1249,462 @@ describe("direct-mode client", () => {
     ).rejects.toThrow("request hash");
   });
 
+  it("creates one durable exact artifact for concurrent identical calls", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({ provider, store });
+    const header = encodePaymentRequiredHeader(
+      makeExactRequired({ amount: "250" }),
+    );
+    const context = {
+      url: "https://api.example.test/file",
+      paymentIdentifier: "concurrent_exact_payment_0001",
+    };
+
+    const [first, second] = await Promise.all([
+      client.createPayment(header, context),
+      client.createPayment(header, context),
+    ]);
+
+    expect(provider.exactPayments).toHaveLength(1);
+    expect(first.exactAttemptId).toBe(second.exactAttemptId);
+    expect(first.paymentPayload).toEqual(second.paymentPayload);
+    await expect(
+      store.loadExactPaymentAttempt(first.exactAttemptId!),
+    ).resolves.toMatchObject({ status: "pending", providerFinalized: false });
+  });
+
+  it("rejects changed exact intent under an existing attempt before signing", async () => {
+    const provider = new FakeFundingProvider();
+    const client = makeClient({ provider, store: new MemoryChannelStore() });
+    const context = {
+      url: "https://api.example.test/file",
+      paymentIdentifier: "changed_exact_payment_0001",
+    };
+    await client.createPayment(
+      encodePaymentRequiredHeader(makeExactRequired({ amount: "250" })),
+      context,
+    );
+
+    await expect(
+      client.createPayment(
+        encodePaymentRequiredHeader(makeExactRequired({ amount: "251" })),
+        context,
+      ),
+    ).rejects.toMatchObject({ code: "invalid_kaspa_exact_replay" });
+    expect(provider.exactPayments).toHaveLength(1);
+  });
+
+  it("lets only one concurrent changed exact intent reach signing", async () => {
+    const provider = new FakeFundingProvider();
+    const client = makeClient({ provider, store: new MemoryChannelStore() });
+    const context = {
+      url: "https://api.example.test/file",
+      paymentIdentifier: "concurrent_changed_exact_payment_0001",
+    };
+
+    const outcomes = await Promise.allSettled([
+      client.createPayment(
+        encodePaymentRequiredHeader(makeExactRequired({ amount: "250" })),
+        context,
+      ),
+      client.createPayment(
+        encodePaymentRequiredHeader(makeExactRequired({ amount: "251" })),
+        context,
+      ),
+    ]);
+
+    expect(
+      outcomes.filter((outcome) => outcome.status === "fulfilled"),
+    ).toHaveLength(1);
+    const [rejected] = outcomes.filter(
+      (outcome): outcome is PromiseRejectedResult =>
+        outcome.status === "rejected",
+    );
+    expect(String(rejected?.reason)).toMatch(
+      /intent changed|different immutable intent/,
+    );
+    expect(provider.exactPayments).toHaveLength(1);
+  });
+
+  it("recovers the provider artifact when client persistence initially fails", async () => {
+    class FailingOnceStore extends MemoryChannelStore {
+      failed = false;
+
+      override async claimExactPaymentAttempt(
+        attempt: ExactPaymentAttemptRecord,
+      ) {
+        if (!this.failed) {
+          this.failed = true;
+          throw new Error("simulated persistence failure");
+        }
+        return super.claimExactPaymentAttempt(attempt);
+      }
+    }
+    const provider = new FakeFundingProvider();
+    const store = new FailingOnceStore();
+    const client = makeClient({ provider, store });
+    const header = encodePaymentRequiredHeader(
+      makeExactRequired({ amount: "250" }),
+    );
+    const context = {
+      url: "https://api.example.test/file",
+      paymentIdentifier: "persistence_exact_payment_0001",
+    };
+
+    await expect(client.createPayment(header, context)).rejects.toThrow(
+      "simulated persistence failure",
+    );
+    const recovered = await client.createPayment(header, context);
+
+    expect(provider.exactPayments).toHaveLength(1);
+    await expect(
+      store.loadExactPaymentAttempt(recovered.exactAttemptId!),
+    ).resolves.toMatchObject({ transactionId: EXACT_TX_ID, status: "pending" });
+  });
+
+  it("restores a pending exact attempt after store restart without signing again", async () => {
+    const provider = new FakeFundingProvider();
+    const firstStore = new MemoryChannelStore();
+    const firstClient = makeClient({ provider, store: firstStore });
+    const header = encodePaymentRequiredHeader(
+      makeExactRequired({ amount: "250" }),
+    );
+    const context = {
+      url: "https://api.example.test/file",
+      paymentIdentifier: "restart_exact_payment_0001",
+    };
+    const first = await firstClient.createPayment(header, context);
+    const record = await firstStore.loadExactPaymentAttempt(
+      first.exactAttemptId!,
+    );
+    const restartedStore = new MemoryChannelStore([], [], [], [record!]);
+    const restartedClient = makeClient({ provider, store: restartedStore });
+
+    const retried = await restartedClient.createPayment(header, context);
+
+    expect(provider.exactPayments).toHaveLength(1);
+    expect(retried.paymentPayload).toEqual(first.paymentPayload);
+  });
+
+  it("keeps merchant-confirmed exact metadata pending until trusted confirmation", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({ provider, store });
+    const payment = await client.createPayment(
+      encodePaymentRequiredHeader(makeExactRequired({ amount: "250" })),
+      {
+        url: "https://api.example.test/file",
+        paymentIdentifier: "fabricated_confirmation_0001",
+      },
+    );
+
+    const acknowledgement = await client.applySettlement(payment, {
+      success: true,
+      transaction: EXACT_TX_ID,
+      network: "kaspa:testnet-10",
+      amount: "250",
+      extensions: kaspaSettlementExtensions({
+        exactProfile: "standard-native",
+        paymentOutputIndex: 0,
+        finality: "confirmed",
+        requestHash: payment.paymentPayload.payload.requestHash,
+      }),
+    });
+
+    expect(acknowledgement).toMatchObject({
+      pending: true,
+      chargedAmount: "250",
+    });
+    expect(provider.exactFinalizations).toHaveLength(0);
+    await expect(
+      store.loadExactPaymentAttempt(payment.exactAttemptId!),
+    ).resolves.toMatchObject({ status: "pending" });
+  });
+
+  it("finalizes exact payment only with trusted confirmation and matching output", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({
+      provider,
+      store,
+      exactPaymentReconciler: {
+        async reconcileExactPayment(attempt) {
+          return {
+            transactionId: attempt.transactionId,
+            evidence: acceptedEvidence(attempt.transactionId),
+            output: {
+              transactionId: attempt.transactionId,
+              outputIndex: 0,
+              scriptPublicKey: STANDARD_PAY_TO_SCRIPT_PUBLIC_KEY,
+              amount: "250",
+            },
+          };
+        },
+      },
+    });
+    const payment = await client.createPayment(
+      encodePaymentRequiredHeader(makeExactRequired({ amount: "250" })),
+      {
+        url: "https://api.example.test/file",
+        paymentIdentifier: "accepted_exact_payment_0001",
+      },
+    );
+
+    await expect(
+      client.reconcileExactPayment(payment.exactAttemptId!),
+    ).resolves.toEqual({
+      attemptId: payment.exactAttemptId,
+      transactionId: EXACT_TX_ID,
+      finality: "confirmed",
+      accepted: true,
+    });
+    expect(provider.exactFinalizations).toEqual([
+      {
+        attemptId: payment.exactAttemptId,
+        transactionId: EXACT_TX_ID,
+        outcome: "accepted",
+      },
+    ]);
+    await expect(
+      store.loadExactPaymentAttempt(payment.exactAttemptId!),
+    ).resolves.toMatchObject({ status: "accepted", providerFinalized: true });
+  });
+
+  it("keeps unconfirmed or output-mismatched exact evidence reserved", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    let confirmationCount = CONFIRMATION_THRESHOLD - 1;
+    let amount = "250";
+    const client = makeClient({
+      provider,
+      store,
+      exactPaymentReconciler: {
+        async reconcileExactPayment(attempt) {
+          return {
+            transactionId: attempt.transactionId,
+            evidence: acceptedEvidence(
+              attempt.transactionId,
+              confirmationCount,
+            ),
+            output: {
+              transactionId: attempt.transactionId,
+              outputIndex: 0,
+              scriptPublicKey: STANDARD_PAY_TO_SCRIPT_PUBLIC_KEY,
+              amount,
+            },
+          };
+        },
+      },
+    });
+    const payment = await client.createPayment(
+      encodePaymentRequiredHeader(makeExactRequired({ amount: "250" })),
+      {
+        url: "https://api.example.test/file",
+        paymentIdentifier: "pending_exact_payment_0001",
+      },
+    );
+
+    await expect(
+      client.reconcileExactPayment(payment.exactAttemptId!),
+    ).resolves.toMatchObject({ finality: "accepted", accepted: false });
+    confirmationCount = CONFIRMATION_THRESHOLD;
+    amount = "249";
+    await expect(
+      client.reconcileExactPayment(payment.exactAttemptId!),
+    ).rejects.toThrow("accepted amount and script");
+    expect(provider.exactFinalizations).toHaveLength(0);
+    await expect(
+      store.loadExactPaymentAttempt(payment.exactAttemptId!),
+    ).resolves.toMatchObject({ status: "pending" });
+  });
+
+  it("permits a new exact attempt only after trusted permanent absence", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({
+      provider,
+      store,
+      exactPaymentReconciler: {
+        async reconcileExactPayment(attempt) {
+          return {
+            transactionId: attempt.transactionId,
+            evidence: absentEvidence(attempt.transactionId),
+          };
+        },
+      },
+    });
+    const header = encodePaymentRequiredHeader(
+      makeExactRequired({ amount: "250" }),
+    );
+    const firstContext = {
+      url: "https://api.example.test/file",
+      paymentIdentifier: "absent_exact_payment_0001",
+    };
+    const first = await client.createPayment(header, firstContext);
+
+    await expect(
+      client.reconcileExactPayment(first.exactAttemptId!),
+    ).resolves.toMatchObject({ finality: "absent", accepted: false });
+    await expect(client.createPayment(header, firstContext)).rejects.toThrow(
+      "new logical payment",
+    );
+    const replacement = await client.createPayment(header, {
+      ...firstContext,
+      paymentIdentifier: "absent_exact_payment_0002",
+    });
+
+    expect(replacement.exactAttemptId).not.toBe(first.exactAttemptId);
+    expect(provider.exactPayments).toHaveLength(2);
+  });
+
+  it("rejects an absence proof for an unrelated spent outpoint", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({
+      provider,
+      store,
+      exactPaymentReconciler: {
+        async reconcileExactPayment(attempt) {
+          const conflictingTransaction = acceptedEvidence("95".repeat(32));
+          return {
+            transactionId: attempt.transactionId,
+            evidence: {
+              status: "absent",
+              transactionId: attempt.transactionId,
+              reason: "conflicting spend",
+              proof: {
+                kind: "confirmed-conflicting-spend",
+                spentOutpoint: { txid: "96".repeat(32), index: 7 },
+                conflictingTransaction,
+              },
+            },
+          };
+        },
+      },
+    });
+    const payment = await client.createPayment(
+      encodePaymentRequiredHeader(makeExactRequired({ amount: "250" })),
+      {
+        url: "https://api.example.test/file",
+        paymentIdentifier: "unbound_absence_payment_0001",
+      },
+    );
+
+    await expect(
+      client.reconcileExactPayment(payment.exactAttemptId!),
+    ).rejects.toThrow("not bound to an input");
+    expect(provider.exactFinalizations).toHaveLength(0);
+    await expect(
+      store.loadExactPaymentAttempt(payment.exactAttemptId!),
+    ).resolves.toMatchObject({ status: "pending" });
+  });
+
+  it("surfaces a lost exact HTTP response as a recoverable pending attempt", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    let calls = 0;
+    const client = makeClient({
+      provider,
+      store,
+      fetch: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return response(
+            402,
+            {
+              [PAYMENT_REQUIRED_HEADER]: encodePaymentRequiredHeader(
+                makeExactRequired({ amount: "250" }),
+              ),
+            },
+            "https://api.example.test/file",
+          );
+        }
+        throw new Error("response lost after broadcast");
+      },
+    });
+
+    let pending: PendingExactPaymentError | undefined;
+    try {
+      await client.paidFetch("https://api.example.test/file", {
+        paymentIdentifier: "lost_response_payment_0001",
+      });
+    } catch (error) {
+      pending = error as PendingExactPaymentError;
+    }
+
+    expect(pending).toBeInstanceOf(PendingExactPaymentError);
+    expect(pending?.payment.transactionId).toBe(EXACT_TX_ID);
+    await expect(
+      store.loadExactPaymentAttempt(pending!.payment.exactAttemptId!),
+    ).resolves.toMatchObject({ status: "pending" });
+  });
+
+  it.each(["missing", "malformed", "false", "corrective"] as const)(
+    "keeps an exact HTTP payment pending after a %s response",
+    async (failure) => {
+      const provider = new FakeFundingProvider();
+      const store = new MemoryChannelStore();
+      let calls = 0;
+      const client = makeClient({
+        provider,
+        store,
+        fetch: async () => {
+          calls += 1;
+          if (calls === 1 || failure === "corrective") {
+            return response(
+              402,
+              {
+                [PAYMENT_REQUIRED_HEADER]: encodePaymentRequiredHeader(
+                  makeExactRequired({ amount: "250" }),
+                ),
+              },
+              "https://api.example.test/file",
+            );
+          }
+          if (failure === "missing") {
+            return response(200, {}, "https://api.example.test/file");
+          }
+          if (failure === "malformed") {
+            return response(
+              200,
+              { [PAYMENT_RESPONSE_HEADER]: "not-base64" },
+              "https://api.example.test/file",
+            );
+          }
+          return response(
+            200,
+            {
+              [PAYMENT_RESPONSE_HEADER]: encodePaymentResponseHeader({
+                success: false,
+                errorReason: "invalid_transaction_state",
+                transaction: "",
+                network: "kaspa:testnet-10",
+              }),
+            },
+            "https://api.example.test/file",
+          );
+        },
+      });
+
+      let pending: PendingExactPaymentError | undefined;
+      try {
+        await client.paidFetch("https://api.example.test/file", {
+          paymentIdentifier: `http_${failure}_exact_payment_0001`,
+        });
+      } catch (error) {
+        pending = error as PendingExactPaymentError;
+      }
+
+      expect(calls).toBe(2);
+      expect(pending).toBeInstanceOf(PendingExactPaymentError);
+      expect(provider.exactPayments).toHaveLength(1);
+      await expect(
+        store.loadExactPaymentAttempt(pending!.payment.exactAttemptId!),
+      ).resolves.toMatchObject({ status: "pending" });
+    },
+  );
+
   it("rejects prepared genesis whose successor is outside its transaction", async () => {
     const provider = new FakeFundingProvider();
     provider.depositMode = "txid-only-ambiguous";
@@ -814,20 +1720,25 @@ describe("direct-mode client", () => {
     ).rejects.toThrow("successor must belong to the signed transaction");
   });
 
-  it("rejects deposit results whose resolved UTXO is below the funding target", async () => {
-    const provider = new FakeFundingProvider();
-    provider.depositMode = "outpoint-underfunded";
-    const client = makeClient({ provider, store: new MemoryChannelStore() });
+  for (const depositMode of [
+    "outpoint-underfunded",
+    "outpoint-overfunded",
+  ] as const) {
+    it(`rejects ${depositMode} deposit results outside the authorized funding target`, async () => {
+      const provider = new FakeFundingProvider();
+      provider.depositMode = depositMode;
+      const client = makeClient({ provider, store: new MemoryChannelStore() });
 
-    await expect(
-      client.createPayment(
-        encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
-        {
-          url: "https://api.example.test/data",
-        },
-      ),
-    ).rejects.toThrow("below the required funding target");
-  });
+      await expect(
+        client.createPayment(
+          encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+          {
+            url: "https://api.example.test/data",
+          },
+        ),
+      ).rejects.toThrow("must equal the authorized funding target");
+    });
+  }
 
   it("recovers a prepared genesis after transport uncertainty without rebuilding it", async () => {
     const provider = new FakeFundingProvider();
@@ -870,9 +1781,8 @@ describe("direct-mode client", () => {
       fundingTransitionReconciler: {
         async reconcileFundingTransition(persisted) {
           return {
-            status: "accepted",
             transactionId: persisted.transactionId,
-            finality: "accepted",
+            evidence: acceptedEvidence(persisted.transactionId),
           };
         },
       },
@@ -884,7 +1794,7 @@ describe("direct-mode client", () => {
       channelId,
       kind: "genesis",
       transactionId: FUNDING_TX,
-      finality: "accepted",
+      finality: "confirmed",
       accepted: true,
       channel: {
         id: channelId,
@@ -941,15 +1851,16 @@ describe("direct-mode client", () => {
         kind: "top-up",
         channelId: captured!.id,
         transactionId: "ff".repeat(32),
-        finality: "accepted",
+        acceptance: acceptedEvidence("ff".repeat(32)),
         evidence: {
           covenantId: captured!.covenantId,
           spentOutpoint: captured!.activeOutpoint,
           successorOutpoint: attempt!.intendedSuccessor.outpoint,
-          successorScriptPublicKey:
-            attempt!.intendedSuccessor.scriptPublicKey,
+          successorScriptPublicKey: attempt!.intendedSuccessor.scriptPublicKey,
           successorAmount: attempt!.intendedSuccessor.amount,
           authorizedSuccessorCount: 1,
+          authorizingInput: 0,
+          acceptance: acceptedEvidence("ff".repeat(32)),
         },
       }),
     ).rejects.toThrow("transaction id does not match");
@@ -978,9 +1889,8 @@ describe("direct-mode client", () => {
       fundingTransitionReconciler: {
         async reconcileFundingTransition(persisted) {
           return {
-            status: "accepted",
             transactionId: persisted.transactionId.toUpperCase(),
-            finality: "confirmed",
+            evidence: acceptedEvidence(persisted.transactionId),
           };
         },
       },
@@ -1005,12 +1915,7 @@ describe("direct-mode client", () => {
       captured!.id,
     );
     expect(
-      () =>
-        new MemoryChannelStore(
-          [recovered.channel!],
-          [],
-          [appliedAttempt!],
-        ),
+      () => new MemoryChannelStore([recovered.channel!], [], [appliedAttempt!]),
     ).not.toThrow();
   });
 
@@ -1027,9 +1932,8 @@ describe("direct-mode client", () => {
       fundingTransitionReconciler: {
         async reconcileFundingTransition(attempt) {
           return {
-            status: "absent",
             transactionId: attempt.transactionId,
-            reason: "authoritative rejection",
+            evidence: absentEvidence(attempt.transactionId),
           };
         },
       },
@@ -1039,7 +1943,7 @@ describe("direct-mode client", () => {
       client.createPayment(required, {
         url: "https://api.example.test/data",
       }),
-    ).rejects.toThrow("not accepted");
+    ).rejects.toThrow("confirmation threshold");
     const channelId = provider.deposits[0]!.channelId;
     await expect(
       client.reconcileFundingTransition(channelId),
@@ -1055,6 +1959,58 @@ describe("direct-mode client", () => {
       }),
     ).resolves.toMatchObject({ openedChannel: true });
     expect(provider.deposits).toHaveLength(2);
+  });
+
+  it("releases a funding transition only when a conflict spends its signed input", async () => {
+    const provider = new FakeFundingProvider();
+    provider.fundingSendFinality = "broadcast";
+    const store = new MemoryChannelStore();
+    let spentOutpoint = { txid: "96".repeat(32), index: 7 };
+    const client = makeClient({
+      provider,
+      store,
+      fundingTransitionReconciler: {
+        async reconcileFundingTransition(attempt) {
+          return {
+            transactionId: attempt.transactionId,
+            evidence: {
+              status: "absent",
+              transactionId: attempt.transactionId,
+              reason: "conflicting spend",
+              proof: {
+                kind: "confirmed-conflicting-spend",
+                spentOutpoint,
+                conflictingTransaction: acceptedEvidence("95".repeat(32)),
+              },
+            },
+          };
+        },
+      },
+    });
+
+    await expect(
+      client.createPayment(
+        encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+        { url: "https://api.example.test/data" },
+      ),
+    ).rejects.toThrow("confirmation threshold");
+    const channelId = provider.deposits[0]!.channelId;
+    const attempt = await store.loadFundingTransitionAttempt(channelId);
+
+    await expect(
+      client.reconcileFundingTransition(channelId),
+    ).resolves.toMatchObject({ finality: "unknown", accepted: false });
+    await expect(
+      store.loadFundingTransitionAttempt(channelId),
+    ).resolves.toBeDefined();
+
+    spentOutpoint = { ...attempt!.inputOutpoints[0]! };
+    await expect(
+      client.reconcileFundingTransition(channelId),
+    ).resolves.toMatchObject({ finality: "absent", accepted: false });
+    await expect(
+      store.loadFundingTransitionAttempt(channelId),
+    ).resolves.toBeUndefined();
   });
 
   it("rejects accepted genesis evidence when the funding transaction has another output", async () => {
@@ -1118,6 +2074,70 @@ describe("direct-mode client", () => {
     expect(stored?.status).toBe("suspicious");
   });
 
+  it("keeps malformed settlement quarantine refund-capable after authoritative reconciliation", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({
+      provider,
+      store,
+      refundBuilder: {
+        async buildRefundTransaction(request) {
+          expect(request.channel.status).toBe("refundable");
+          await request.signDigest("dd".repeat(32));
+          return {
+            transaction: "ab".repeat(32),
+            transactionId: REFUND_TX,
+            refundAmount: request.refundAmount,
+          };
+        },
+      },
+    });
+    const payment = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+      { url: "https://api.example.test/data" },
+    );
+    provider.daa = "1001";
+
+    await expect(
+      client.applySettlement(
+        payment,
+        makeSettlement(payment.channel!, "100", {
+          channelId: "ff".repeat(32),
+        }),
+      ),
+    ).rejects.toThrow("channel id");
+    await expect(store.loadChannels({})).resolves.toMatchObject([
+      { status: "suspicious" },
+    ]);
+
+    const refund = await client.refundChannel(payment.channel!.id);
+    expect(refund.channel.status).toBe("refunded");
+    expect(refund.channel.chargedCumulativeAmount).toBe("0");
+  });
+
+  it("does not let a delayed settlement reactivate a refund-only channel", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({ provider, store });
+    const payment = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+      { url: "https://api.example.test/data" },
+    );
+    await client.quarantineDisclosedPayment(payment);
+    await expect(
+      client.reconcileChannel(payment.channel!.id),
+    ).resolves.toMatchObject({
+      status: "refundable",
+    });
+
+    await expect(
+      client.applySettlement(payment, makeSettlement(payment.channel!, "100")),
+    ).rejects.toThrow("changed before settlement apply");
+    await expect(store.loadChannels({})).resolves.toMatchObject([
+      { id: payment.channel!.id, status: "refundable" },
+    ]);
+  });
+
   it("rejects settlement state that does not match this request transition", async () => {
     const provider = new FakeFundingProvider();
     const store = new MemoryChannelStore();
@@ -1129,7 +2149,7 @@ describe("direct-mode client", () => {
       },
     );
     const bad = makeSettlement(payment.channel!, "100", {
-      chargedCumulativeAmount: "99",
+      authorizedCumulativeAmount: "99",
     });
 
     await expect(client.applySettlement(payment, bad)).rejects.toThrow(
@@ -1186,17 +2206,32 @@ describe("direct-mode client", () => {
       extensions: kaspaSettlementExtensions({
         commitmentId: COMMITMENT,
         chargedAmount: "99",
-        channelState: channelState(
-          payment.channel!,
-          "100",
-          payment.channel!.signedMaxClaimable,
-        ),
+        channelState: channelState(payment.channel!, "100"),
       }),
     };
 
     await expect(client.applySettlement(payment, bad)).rejects.toThrow(
       "charged amount",
     );
+  });
+
+  it("rejects a provider-local lower charge than the accepted fixed amount", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({ provider, store });
+    const payment = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+      { url: "https://api.example.test/data" },
+    );
+    const bad = makeSettlement(payment.channel!, "99", {
+      authorizedCumulativeAmount: "99",
+    });
+
+    await expect(client.applySettlement(payment, bad)).rejects.toThrow(
+      "accepted fixed charge",
+    );
+    const [stored] = await store.loadChannels({});
+    expect(stored?.status).toBe("suspicious");
   });
 
   it("verifies deposit settlement funding amount", async () => {
@@ -1218,180 +2253,7 @@ describe("direct-mode client", () => {
     );
   });
 
-  it("adopts verified corrective channel state before reusing a channel", async () => {
-    const provider = new FakeFundingProvider();
-    const store = new MemoryChannelStore();
-    let verified = 0;
-    const client = makeClient({
-      provider,
-      store,
-      verifyVoucherSignature: () => {
-        verified += 1;
-        return true;
-      },
-    });
-    const firstPayment = await client.createPayment(
-      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
-      {
-        url: "https://api.example.test/data",
-      },
-    );
-    await client.applySettlement(
-      firstPayment,
-      makeSettlement(firstPayment.channel!, "100"),
-    );
-
-    const correctiveState = channelState(firstPayment.channel!, "100", "200");
-    const correctiveRequired = makeRequired({
-      amount: "50",
-      channelState: correctiveState,
-      voucherState: {
-        amount: "200",
-        signature: "aa".repeat(64),
-      },
-    });
-    const correctivePayment = await client.createPayment(
-      encodePaymentRequiredHeader(correctiveRequired),
-      {
-        url: "https://api.example.test/data",
-      },
-    );
-
-    expect(verified).toBe(1);
-    expect(correctivePayment.openedChannel).toBe(false);
-    expect(correctivePayment.paymentPayload.payload.type).toBe("voucher");
-    expect(
-      voucherBearingPayload(correctivePayment.paymentPayload).voucher.amount,
-    ).toBe("200");
-  });
-
-  it("recovers a changed active outpoint from verified corrective state", async () => {
-    const provider = new FakeFundingProvider();
-    const store = new MemoryChannelStore();
-    const replacementOutpoint = { txid: "77".repeat(32), index: 0 };
-    let verifierSawReplacement = false;
-    const client = makeClient({
-      provider,
-      store,
-      verifyVoucherSignature: (_voucher, channel) => {
-        verifierSawReplacement =
-          channel.activeOutpoint.txid === replacementOutpoint.txid;
-        return true;
-      },
-    });
-    const firstPayment = await client.createPayment(
-      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
-      {
-        url: "https://api.example.test/data",
-      },
-    );
-    await client.applySettlement(
-      firstPayment,
-      makeSettlement(firstPayment.channel!, "100"),
-    );
-    const successorScriptPublicKey = v2EscrowScriptPublicKey(
-      firstPayment.channel!,
-      "100",
-    );
-    provider.utxos.push({
-      outpoint: replacementOutpoint,
-      covenantId: firstPayment.channel!.covenantId,
-      amount: "900",
-      address: firstPayment.channel!.escrowAddress,
-      scriptPublicKey: successorScriptPublicKey,
-    });
-    const correctiveRequired = makeRequired({
-      amount: "50",
-      channelState: {
-        ...channelState(firstPayment.channel!, "100", "100"),
-        activeOutpoint: replacementOutpoint,
-        activeScriptPublicKey: successorScriptPublicKey,
-        fundingAmount: "900",
-        claimedCumulativeAmount: "100",
-      },
-      voucherState: {
-        amount: "100",
-        signature: "aa".repeat(64),
-      },
-    });
-
-    const payment = await client.createPayment(
-      encodePaymentRequiredHeader(correctiveRequired),
-      {
-        url: "https://api.example.test/data",
-      },
-    );
-
-    expect(verifierSawReplacement).toBe(true);
-    expect(payment.openedChannel).toBe(false);
-    expect(
-      voucherBearingPayload(payment.paymentPayload).fundingOutpoint,
-    ).toEqual(replacementOutpoint);
-    expect(voucherBearingPayload(payment.paymentPayload).voucher.amount).toBe(
-      "150",
-    );
-    const [stored] = await store.loadChannels({});
-    expect(stored?.escrowAddress).toBe(
-      `kaspatest:${sha256Hex(successorScriptPublicKey).slice(0, 32)}`,
-    );
-  });
-
-  it("rejects corrective state whose script does not encode its claimed amount", async () => {
-    const provider = new FakeFundingProvider();
-    const store = new MemoryChannelStore();
-    const client = makeClient({
-      provider,
-      store,
-      verifyVoucherSignature: () => true,
-    });
-    const firstPayment = await client.createPayment(
-      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
-      {
-        url: "https://api.example.test/data",
-      },
-    );
-    await client.applySettlement(
-      firstPayment,
-      makeSettlement(firstPayment.channel!, "100"),
-    );
-    const [original] = await store.loadChannels({});
-    if (!original) throw new Error("missing stored channel");
-    const replacementOutpoint = { txid: "78".repeat(32), index: 0 };
-    provider.utxos.push({
-      outpoint: replacementOutpoint,
-      covenantId: original.covenantId,
-      amount: "900",
-      address: original.escrowAddress,
-      scriptPublicKey: original.activeScriptPublicKey,
-    });
-    const correctiveRequired = makeRequired({
-      amount: "50",
-      channelState: {
-        ...channelState(original, "100", "100"),
-        activeOutpoint: replacementOutpoint,
-        fundingAmount: "900",
-        claimedCumulativeAmount: "100",
-      },
-      voucherState: {
-        amount: "100",
-        signature: "aa".repeat(64),
-      },
-    });
-
-    await expect(
-      client.createPayment(encodePaymentRequiredHeader(correctiveRequired), {
-        url: "https://api.example.test/data",
-      }),
-    ).rejects.toThrow(
-      "corrective active script does not match lifetime settled accounting",
-    );
-
-    const [afterRejection] = await store.loadChannels({});
-    expect(afterRejection).toEqual(original);
-    expect(afterRejection?.status).toBe("active");
-  });
-
-  it("rejects corrective channel state without voucher proof", async () => {
+  it("ignores peer corrective channel state before reusing a channel", async () => {
     const provider = new FakeFundingProvider();
     const store = new MemoryChannelStore();
     const client = makeClient({ provider, store });
@@ -1406,19 +2268,257 @@ describe("direct-mode client", () => {
       makeSettlement(firstPayment.channel!, "100"),
     );
 
+    const correctiveState = {
+      ...channelState(firstPayment.channel!, "200"),
+      fundingAmount: "999999",
+    };
+    const correctiveRequired = makeRequired({
+      amount: "50",
+      channelState: correctiveState,
+    });
+    const correctivePayment = await client.createPayment(
+      encodePaymentRequiredHeader(correctiveRequired),
+      {
+        url: "https://api.example.test/data",
+      },
+    );
+
+    expect(correctivePayment.openedChannel).toBe(false);
+    expect(correctivePayment.paymentPayload.payload.type).toBe("voucher");
+    expect(
+      voucherBearingPayload(correctivePayment.paymentPayload).voucher
+        .authorizedCumulativeAmount,
+    ).toBe("150");
+  });
+
+  it("recovers a changed active outpoint from authoritative lineage", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const replacementOutpoint = { txid: "77".repeat(32), index: 0 };
+    const client = makeClient({ provider, store });
+    const firstPayment = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+      {
+        url: "https://api.example.test/data",
+      },
+    );
+    await client.applySettlement(
+      firstPayment,
+      makeSettlement(firstPayment.channel!, "100"),
+    );
+    const successorScriptPublicKey = v4EscrowScriptPublicKey(
+      firstPayment.channel!,
+      "100",
+    );
+    const replacementAcceptance = acceptedEvidence(
+      replacementOutpoint.txid,
+      CONFIRMATION_THRESHOLD,
+      "76".repeat(32),
+    );
+    provider.utxos.push({
+      outpoint: replacementOutpoint,
+      covenantId: firstPayment.channel!.covenantId,
+      amount: "900",
+      address: firstPayment.channel!.escrowAddress,
+      scriptPublicKey: successorScriptPublicKey,
+      acceptance: replacementAcceptance,
+    });
+    provider.lineageDiscovery = (request) =>
+      request.lineage.currentHead?.outpoint.txid === replacementOutpoint.txid
+        ? {
+            fromCheckpoint: request.lineage.checkpoint,
+            checkpoint: request.lineage.checkpoint,
+            continuity: "complete",
+            removedChainBlockHashes: [],
+            addedChainBlocks: [],
+          }
+        : {
+            fromCheckpoint: request.lineage.checkpoint,
+            checkpoint: replacementAcceptance.checkpoint,
+            continuity: "complete",
+            removedChainBlockHashes: [],
+            addedChainBlocks: [
+              {
+                blockHash: replacementAcceptance.acceptingBlockHash,
+                transitions: [
+                  {
+                    kind: "claim",
+                    covenantId: firstPayment.channel!.covenantId,
+                    templateId: firstPayment.channel!.templateId,
+                    consumedOutpoint: firstPayment.channel!.activeOutpoint,
+                    transactionId: replacementOutpoint.txid,
+                    authorizedSuccessorCount: 1,
+                    successor: {
+                      outpoint: replacementOutpoint,
+                      covenantId: firstPayment.channel!.covenantId,
+                      authorizingInput: 0,
+                      scriptPublicKey: successorScriptPublicKey,
+                      value: "900",
+                      claimedCumulativeAmount: "100",
+                    },
+                    terminalOutput: null,
+                    acceptance: replacementAcceptance,
+                  },
+                ],
+              },
+            ],
+          };
+    const correctiveRequired = makeRequired({
+      amount: "50",
+      channelState: {
+        ...channelState(firstPayment.channel!, "100"),
+        activeOutpoint: replacementOutpoint,
+        activeScriptPublicKey: successorScriptPublicKey,
+        fundingAmount: "900",
+        claimedCumulativeAmount: "100",
+      },
+    });
+
+    const payment = await client.createPayment(
+      encodePaymentRequiredHeader(correctiveRequired),
+      {
+        url: "https://api.example.test/data",
+      },
+    );
+
+    expect(payment.openedChannel).toBe(false);
+    expect(
+      voucherBearingPayload(payment.paymentPayload).fundingOutpoint,
+    ).toEqual(replacementOutpoint);
+    expect(
+      voucherBearingPayload(payment.paymentPayload).voucher
+        .authorizedCumulativeAmount,
+    ).toBe("150");
+    const [stored] = await store.loadChannels({});
+    expect(stored?.escrowAddress).toBe(
+      `kaspatest:${sha256Hex(successorScriptPublicKey).slice(0, 32)}`,
+    );
+  });
+
+  it("rejects authoritative lineage whose script does not encode its claimed amount", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({ provider, store });
+    const firstPayment = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+      {
+        url: "https://api.example.test/data",
+      },
+    );
+    await client.applySettlement(
+      firstPayment,
+      makeSettlement(firstPayment.channel!, "100"),
+    );
+    const [original] = await store.loadChannels({});
+    if (!original) throw new Error("missing stored channel");
+    const replacementOutpoint = { txid: "78".repeat(32), index: 0 };
+    const replacementAcceptance = acceptedEvidence(
+      replacementOutpoint.txid,
+      CONFIRMATION_THRESHOLD,
+      "75".repeat(32),
+    );
+    provider.utxos.push({
+      outpoint: replacementOutpoint,
+      covenantId: original.covenantId,
+      amount: "900",
+      address: original.escrowAddress,
+      scriptPublicKey: original.activeScriptPublicKey,
+      acceptance: replacementAcceptance,
+    });
+    provider.lineageDiscovery = (request) =>
+      request.lineage.currentHead?.outpoint.txid === replacementOutpoint.txid
+        ? {
+            fromCheckpoint: request.lineage.checkpoint,
+            checkpoint: request.lineage.checkpoint,
+            continuity: "complete",
+            removedChainBlockHashes: [],
+            addedChainBlocks: [],
+          }
+        : {
+            fromCheckpoint: request.lineage.checkpoint,
+            checkpoint: replacementAcceptance.checkpoint,
+            continuity: "complete",
+            removedChainBlockHashes: [],
+            addedChainBlocks: [
+              {
+                blockHash: replacementAcceptance.acceptingBlockHash,
+                transitions: [
+                  {
+                    kind: "claim",
+                    covenantId: original.covenantId,
+                    templateId: original.templateId,
+                    consumedOutpoint: original.activeOutpoint,
+                    transactionId: replacementOutpoint.txid,
+                    authorizedSuccessorCount: 1,
+                    successor: {
+                      outpoint: replacementOutpoint,
+                      covenantId: original.covenantId,
+                      authorizingInput: 0,
+                      scriptPublicKey: original.activeScriptPublicKey,
+                      value: "900",
+                      claimedCumulativeAmount: "100",
+                    },
+                    terminalOutput: null,
+                    acceptance: replacementAcceptance,
+                  },
+                ],
+              },
+            ],
+          };
+    const correctiveRequired = makeRequired({
+      amount: "50",
+      channelState: {
+        ...channelState(original, "100"),
+        activeOutpoint: replacementOutpoint,
+        fundingAmount: "900",
+        claimedCumulativeAmount: "100",
+      },
+    });
+
     await expect(
-      client.createPayment(
-        encodePaymentRequiredHeader(
-          makeRequired({
-            amount: "50",
-            channelState: channelState(firstPayment.channel!, "100", "200"),
-          }),
-        ),
-        {
-          url: "https://api.example.test/data",
-        },
+      client.createPayment(encodePaymentRequiredHeader(correctiveRequired), {
+        url: "https://api.example.test/data",
+      }),
+    ).rejects.toThrow("authoritative successor does not match");
+
+    const [afterRejection] = await store.loadChannels({});
+    expect(afterRejection).toEqual(original);
+    expect(afterRejection?.status).toBe("active");
+  });
+
+  it("does not let peer channel state advance authorization without local proof", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({ provider, store });
+    const firstPayment = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+      {
+        url: "https://api.example.test/data",
+      },
+    );
+    await client.applySettlement(
+      firstPayment,
+      makeSettlement(firstPayment.channel!, "100"),
+    );
+    const [withoutProof] = await store.loadChannels({});
+    if (!withoutProof) throw new Error("missing stored channel");
+    await store.saveChannel({ ...withoutProof, latestVoucher: undefined });
+
+    const payment = await client.createPayment(
+      encodePaymentRequiredHeader(
+        makeRequired({
+          amount: "50",
+          channelState: channelState(firstPayment.channel!, "200"),
+        }),
       ),
-    ).rejects.toThrow("requires voucher proof");
+      {
+        url: "https://api.example.test/data",
+      },
+    );
+    expect(
+      voucherBearingPayload(payment.paymentPayload).voucher
+        .authorizedCumulativeAmount,
+    ).toBe("150");
   });
 
   it("uses active unclaimed value after claims when checking balance and signing", async () => {
@@ -1437,14 +2537,69 @@ describe("direct-mode client", () => {
     );
     const [stored] = await store.loadChannels({});
     if (!stored) throw new Error("missing stored channel");
+    const claimOutpoint = { txid: "79".repeat(32), index: 0 };
+    const claimScriptPublicKey = v4EscrowScriptPublicKey(stored, "250");
+    const claimAcceptance = acceptedEvidence(
+      claimOutpoint.txid,
+      CONFIRMATION_THRESHOLD,
+      "74".repeat(32),
+    );
+    provider.utxos.push({
+      outpoint: claimOutpoint,
+      covenantId: stored.covenantId,
+      amount: "750",
+      address: stored.escrowAddress,
+      scriptPublicKey: claimScriptPublicKey,
+      acceptance: claimAcceptance,
+    });
+    provider.lineageDiscovery = (request) =>
+      request.lineage.currentHead?.outpoint.txid === claimOutpoint.txid
+        ? {
+            fromCheckpoint: request.lineage.checkpoint,
+            checkpoint: request.lineage.checkpoint,
+            continuity: "complete",
+            removedChainBlockHashes: [],
+            addedChainBlocks: [],
+          }
+        : {
+            fromCheckpoint: request.lineage.checkpoint,
+            checkpoint: claimAcceptance.checkpoint,
+            continuity: "complete",
+            removedChainBlockHashes: [],
+            addedChainBlocks: [
+              {
+                blockHash: claimAcceptance.acceptingBlockHash,
+                transitions: [
+                  {
+                    kind: "claim",
+                    covenantId: stored.covenantId,
+                    templateId: stored.templateId,
+                    consumedOutpoint: stored.activeOutpoint,
+                    transactionId: claimOutpoint.txid,
+                    authorizedSuccessorCount: 1,
+                    successor: {
+                      outpoint: claimOutpoint,
+                      covenantId: stored.covenantId,
+                      authorizingInput: 0,
+                      scriptPublicKey: claimScriptPublicKey,
+                      value: "750",
+                      claimedCumulativeAmount: "250",
+                    },
+                    terminalOutput: null,
+                    acceptance: claimAcceptance,
+                  },
+                ],
+              },
+            ],
+          };
+    const reconciled = await client.reconcileChannel(stored.id);
     await store.saveChannel({
-      ...stored,
+      ...reconciled,
       chargedCumulativeAmount: "300",
-      claimedCumulativeAmount: "250",
       signedMaxClaimable: "300",
       latestVoucher: {
-        covenantId: stored.covenantId,
-        amount: "300",
+        covenantId: reconciled.covenantId,
+        authorizedCumulativeAmount: "300",
         signature: "dd".repeat(64),
       },
     });
@@ -1457,9 +2612,10 @@ describe("direct-mode client", () => {
     );
 
     expect(payment.openedChannel).toBe(false);
-    expect(voucherBearingPayload(payment.paymentPayload).voucher.amount).toBe(
-      "375",
-    );
+    expect(
+      voucherBearingPayload(payment.paymentPayload).voucher
+        .authorizedCumulativeAmount,
+    ).toBe("375");
   });
 
   it("drives paid HTTP fetch with PAYMENT headers", async () => {
@@ -1501,6 +2657,48 @@ describe("direct-mode client", () => {
     expect(capturedPayment?.payload.type).toBe("deposit-voucher");
     expect(result.settlement?.channel!.chargedCumulativeAmount).toBe("100");
   });
+
+  it.each([
+    ["missing", undefined],
+    ["malformed", "not-base64"],
+  ])(
+    "quarantines a disclosed batch voucher when HTTP settlement metadata is %s",
+    async (_label, responseHeader) => {
+      const provider = new FakeFundingProvider();
+      const store = new MemoryChannelStore();
+      let attempts = 0;
+      const client = makeClient({
+        provider,
+        store,
+        fetch: async () => {
+          attempts += 1;
+          if (attempts === 1) {
+            return response(402, {
+              [PAYMENT_REQUIRED_HEADER]: encodePaymentRequiredHeader(
+                makeRequired({ amount: "100" }),
+              ),
+            });
+          }
+          return response(
+            200,
+            responseHeader ? { [PAYMENT_RESPONSE_HEADER]: responseHeader } : {},
+          );
+        },
+      });
+
+      await expect(
+        client.paidFetch("https://api.example.test/data"),
+      ).rejects.toThrow(
+        responseHeader
+          ? "header must use canonical padded base64"
+          : "paid retry response is missing PAYMENT-RESPONSE",
+      );
+      expect(attempts).toBe(2);
+      await expect(store.loadChannels({})).resolves.toMatchObject([
+        { status: "suspicious", signedMaxClaimable: "100" },
+      ]);
+    },
+  );
 
   it("rejects redirected payment challenges before signing", async () => {
     const provider = new FakeFundingProvider();
@@ -1631,6 +2829,7 @@ describe("direct-mode client", () => {
       toolName: "download",
       arguments: { id: "alpha" },
       accepted: required.accepts[0]!,
+      resource: required.resource,
     });
     let attempts = 0;
 
@@ -1660,6 +2859,185 @@ describe("direct-mode client", () => {
     expect(provider.exactPayments[0]?.requestHash).toBe(expectedRequestHash);
   });
 
+  it("rejects a non-canonical MCP requestHash before payment creation", async () => {
+    const provider = new FakeFundingProvider();
+    const client = makeClient({ provider, store: new MemoryChannelStore() });
+    const required = makeExactRequired({ amount: "100" });
+
+    await expect(
+      paidMcpToolCall(
+        client,
+        async () => mcpPaymentRequiredResult(required),
+        { name: "download", arguments: { id: "canonical" } },
+        { audience: MCP_AUDIENCE, requestHash: "ff".repeat(32) },
+      ),
+    ).rejects.toThrow("canonical tool-call fingerprint");
+    expect(provider.exactPayments).toHaveLength(0);
+    expect(provider.batchAuthorizations).toHaveLength(0);
+  });
+
+  it("rejects an over-budget MCP result before wallet or signer work", async () => {
+    const provider = new FakeFundingProvider();
+    const client = makeClient({ provider, store: new MemoryChannelStore() });
+
+    await expect(
+      paidMcpToolCall(
+        client,
+        async () => ({
+          content: [
+            {
+              type: "text",
+              text: "x".repeat(
+                KASPA_X402_RESOURCE_BUDGET.maxStringBytes + 1,
+              ),
+            },
+          ],
+        }),
+        { name: "download", arguments: { id: "oversized" } },
+        { audience: MCP_AUDIENCE },
+      ),
+    ).rejects.toThrow("string limit");
+    expect(provider.exactPayments).toHaveLength(0);
+    expect(provider.batchAuthorizations).toHaveLength(0);
+  });
+
+  it.each(["missing", "malformed", "transport"] as const)(
+    "keeps an exact MCP payment pending after a %s response failure",
+    async (failure) => {
+      const provider = new FakeFundingProvider();
+      const store = new MemoryChannelStore();
+      const client = makeClient({ provider, store });
+      const required = makeExactRequired({ amount: "100" });
+      let calls = 0;
+
+      let pending: PendingExactPaymentError | undefined;
+      try {
+        await paidMcpToolCall(
+          client,
+          async (params) => {
+            calls += 1;
+            if (!params._meta?.[MCP_PAYMENT_META_KEY])
+              return mcpPaymentRequiredResult(required);
+            if (failure === "transport")
+              throw new Error("tool response lost after settlement");
+            if (failure === "missing")
+              return { content: [{ type: "text", text: "paid data" }] };
+            return {
+              content: [{ type: "text", text: "paid data" }],
+              _meta: {
+                [MCP_PAYMENT_RESPONSE_META_KEY]: { success: "yes" },
+              },
+            } as unknown as McpToolResult;
+          },
+          { name: "download", arguments: { id: failure } },
+          {
+            audience: MCP_AUDIENCE,
+            paymentIdentifier: `mcp_${failure}_exact_payment_0001`,
+          },
+        );
+      } catch (error) {
+        pending = error as PendingExactPaymentError;
+      }
+
+      expect(calls).toBe(2);
+      expect(pending).toBeInstanceOf(PendingExactPaymentError);
+      expect(pending?.payment.exactAttemptId).toMatch(/^[0-9a-f]{64}$/);
+      expect(provider.exactPayments).toHaveLength(1);
+      await expect(
+        store.loadExactPaymentAttempt(pending!.payment.exactAttemptId!),
+      ).resolves.toMatchObject({ status: "pending" });
+    },
+  );
+
+  it("quarantines a disclosed batch voucher when MCP settlement metadata is missing", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({ provider, store });
+    const required = makeRequired({ amount: "100" });
+
+    await expect(
+      paidMcpToolCall(
+        client,
+        async (params) =>
+          params._meta?.["x402/payment"]
+            ? { content: [{ type: "text", text: "missing settlement" }] }
+            : mcpPaymentRequiredResult(required),
+        { name: "metered", arguments: { id: "alpha" } },
+        { audience: MCP_AUDIENCE },
+      ),
+    ).rejects.toThrow("missing x402 payment response metadata");
+    await expect(store.loadChannels({})).resolves.toMatchObject([
+      { status: "suspicious", signedMaxClaimable: "100" },
+    ]);
+  });
+
+  it("accepts an MCP error charge only when terms and payer intent approve the fixed amount", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({ provider, store });
+    const required = makeRequired({
+      amount: "100",
+      mcpErrorChargeSompi: "100",
+    });
+
+    const result = await paidMcpToolCall(
+      client,
+      async (params) => {
+        if (!params._meta?.[MCP_PAYMENT_META_KEY])
+          return mcpPaymentRequiredResult(required);
+        const [channel] = await store.loadChannels({});
+        return {
+          isError: true,
+          content: [{ type: "text", text: "chargeable tool error" }],
+          _meta: {
+            [MCP_PAYMENT_RESPONSE_META_KEY]: makeSettlement(channel!, "100"),
+          },
+        };
+      },
+      { name: "download", arguments: { id: "chargeable-error" } },
+      { audience: MCP_AUDIENCE },
+    );
+
+    expect(result.result.isError).toBe(true);
+    expect(result.settlement?.chargedAmount).toBe("100");
+    expect(result.errorCharge).toEqual({
+      approvedAmount: "100",
+      settledAmount: "100",
+    });
+    expect(provider.batchAuthorizations).toHaveLength(1);
+    expect(provider.batchAuthorizations[0]?.mcpErrorChargeSompi).toBe("100");
+  });
+
+  it("flags an unexpected MCP error carrying a non-approved batch charge", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({ provider, store });
+    const required = makeRequired({ amount: "100" });
+
+    await expect(
+      paidMcpToolCall(
+        client,
+        async (params) => {
+          if (!params._meta?.[MCP_PAYMENT_META_KEY])
+            return mcpPaymentRequiredResult(required);
+          const [channel] = await store.loadChannels({});
+          return {
+            isError: true,
+            content: [{ type: "text", text: "unexpected tool error" }],
+            _meta: {
+              [MCP_PAYMENT_RESPONSE_META_KEY]: makeSettlement(channel!, "100"),
+            },
+          };
+        },
+        { name: "download", arguments: { id: "unexpected-error" } },
+        { audience: MCP_AUDIENCE },
+      ),
+    ).rejects.toThrow("non-approved batch charge");
+    await expect(store.loadChannels({})).resolves.toMatchObject([
+      { status: "suspicious" },
+    ]);
+  });
+
   it("uses client mainnet opt-in for paid MCP tool calls", async () => {
     const provider = new FakeFundingProvider("hot-wallet", "kaspa:mainnet");
     const client = makeClient({
@@ -1676,6 +3054,7 @@ describe("direct-mode client", () => {
       toolName: "download",
       arguments: { id: "mainnet" },
       accepted: required.accepts[0]!,
+      resource: required.resource,
     });
 
     const result = await paidMcpToolCall(
@@ -1723,6 +3102,7 @@ describe("direct-mode client", () => {
       toolName: "download",
       arguments: { id: "scheme-policy" },
       accepted: exactRequired.accepts[0]!,
+      resource: required.resource,
     });
 
     const result = await paidMcpToolCall(
@@ -1757,6 +3137,7 @@ describe("direct-mode client", () => {
       toolName: "download",
       arguments: { id: "fallback" },
       accepted: required.accepts[0]!,
+      resource: required.resource,
     });
 
     const result = await paidMcpToolCall(
@@ -1816,7 +3197,8 @@ describe("direct-mode client", () => {
     );
 
     expect(result.result.isError).toBe(true);
-    expect(result.settlement?.chargedAmount).toBe("0");
+    expect(result.settlement?.chargedAmount).toBe("100");
+    expect(result.settlement?.pending).toBe(true);
     expect(result.settlement?.response.success).toBe(false);
   });
 
@@ -1855,7 +3237,8 @@ describe("direct-mode client", () => {
     expect(calls).toBe(2);
     expect(provider.exactPayments).toHaveLength(1);
     expect(result.result.isError).toBe(true);
-    expect(result.settlement?.chargedAmount).toBe("0");
+    expect(result.settlement?.chargedAmount).toBe("100");
+    expect(result.settlement?.pending).toBe(true);
     expect(result.settlement?.response).toEqual(settlement);
   });
 
@@ -1884,6 +3267,94 @@ describe("direct-mode client", () => {
 
     expect(calls).toBe(2);
     expect(provider.exactPayments).toHaveLength(1);
+  });
+
+  it("rejects missing required identifiers before exact or deposit adapter work", async () => {
+    for (const required of [
+      {
+        ...makeExactRequired({ amount: "100" }),
+        extensions: {
+          "payment-identifier": paymentIdentifierExtension({ required: true }),
+        },
+      },
+      makeRequired({
+        amount: "100",
+        extensions: {
+          "payment-identifier": paymentIdentifierExtension({ required: true }),
+        },
+      }),
+    ]) {
+      const provider = new FakeFundingProvider();
+      const client = makeClient({ provider, store: new MemoryChannelStore() });
+      await expect(
+        client.createPayment(encodePaymentRequiredHeader(required), {
+          url: required.resource.url,
+        }),
+      ).rejects.toThrow("required for this retry");
+      expect(provider.exactPayments).toHaveLength(0);
+      expect(provider.deposits).toHaveLength(0);
+      expect(provider.topUps).toHaveLength(0);
+      expect(provider.sendCount).toBe(0);
+    }
+  });
+
+  it("rejects an unsupported identifier schema before exact or deposit adapter work", async () => {
+    const invalidExtension = {
+      info: { required: false },
+      schema: { oneOf: [{ type: "object" }] },
+    };
+    for (const required of [
+      {
+        ...makeExactRequired({ amount: "100" }),
+        extensions: { "payment-identifier": invalidExtension },
+      },
+      makeRequired({
+        amount: "100",
+        extensions: { "payment-identifier": invalidExtension },
+      }),
+    ] as PaymentRequired[]) {
+      const provider = new FakeFundingProvider();
+      const client = makeClient({ provider, store: new MemoryChannelStore() });
+      await expect(
+        client.createPayment(encodePaymentRequiredHeader(required), {
+          url: required.resource.url,
+        }),
+      ).rejects.toThrow("schema is invalid");
+      expect(provider.exactPayments).toHaveLength(0);
+      expect(provider.deposits).toHaveLength(0);
+      expect(provider.sendCount).toBe(0);
+    }
+  });
+
+  it("rejects a missing required identifier before an automatic top-up", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({ provider, store });
+    await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+      { url: "https://api.example.test/data" },
+    );
+    const sendsBefore = provider.sendCount;
+
+    await expect(
+      client.createPayment(
+        encodePaymentRequiredHeader(
+          makeRequired({
+            amount: "995",
+            minDepositSompi: "1005",
+            extensions: {
+              "payment-identifier": paymentIdentifierExtension({
+                required: true,
+              }),
+            },
+          }),
+        ),
+        { url: "https://api.example.test/data" },
+      ),
+    ).rejects.toThrow("required for this retry");
+
+    expect(provider.topUps).toHaveLength(0);
+    expect(provider.sendCount).toBe(sendsBefore);
   });
 
   it("passes payment identifiers through paidFetch retries", async () => {
@@ -1968,11 +3439,7 @@ describe("direct-mode client", () => {
             "PAYMENT-REQUIRED": encodePaymentRequiredHeader(
               makeRequired({
                 amount: "50",
-                channelState: channelState(channel, "0", "200"),
-                voucherState: {
-                  amount: "200",
-                  signature: "aa".repeat(64),
-                },
+                channelState: channelState(channel, "0"),
               }),
             ),
           });
@@ -2040,9 +3507,218 @@ describe("direct-mode client", () => {
     expect(signedDigests).toEqual([refundDigest]);
   });
 
+  it("independently discovers a partial-claim successor and refunds that head", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({
+      provider,
+      store,
+      refundBuilder: {
+        async buildRefundTransaction(request) {
+          expect(request.channel.activeOutpoint.txid).toBe("79".repeat(32));
+          expect(request.refundAmount).toBe("750");
+          await request.signDigest("dd".repeat(32));
+          return {
+            transaction: "ab".repeat(32),
+            transactionId: REFUND_TX,
+            refundAmount: request.refundAmount,
+          };
+        },
+      },
+    });
+    const payment = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+      { url: "https://api.example.test/data" },
+    );
+    provider.daa = "1001";
+    const channel = payment.channel!;
+    const claimOutpoint = { txid: "79".repeat(32), index: 0 };
+    const claimScriptPublicKey = v4EscrowScriptPublicKey(channel, "250");
+    const claimAcceptance = acceptedEvidence(
+      claimOutpoint.txid,
+      CONFIRMATION_THRESHOLD,
+      "74".repeat(32),
+    );
+    provider.utxos.push({
+      outpoint: claimOutpoint,
+      covenantId: channel.covenantId,
+      amount: "750",
+      address: channel.escrowAddress,
+      scriptPublicKey: claimScriptPublicKey,
+      acceptance: claimAcceptance,
+    });
+    provider.lineageDiscovery = (request) =>
+      request.lineage.currentHead?.outpoint.txid === claimOutpoint.txid
+        ? {
+            fromCheckpoint: request.lineage.checkpoint,
+            checkpoint: request.lineage.checkpoint,
+            continuity: "complete",
+            removedChainBlockHashes: [],
+            addedChainBlocks: [],
+          }
+        : {
+            fromCheckpoint: request.lineage.checkpoint,
+            checkpoint: claimAcceptance.checkpoint,
+            continuity: "complete",
+            removedChainBlockHashes: [],
+            addedChainBlocks: [
+              {
+                blockHash: claimAcceptance.acceptingBlockHash,
+                transitions: [
+                  {
+                    kind: "claim",
+                    covenantId: channel.covenantId,
+                    templateId: channel.templateId,
+                    consumedOutpoint: channel.activeOutpoint,
+                    transactionId: claimOutpoint.txid,
+                    authorizedSuccessorCount: 1,
+                    successor: {
+                      outpoint: claimOutpoint,
+                      covenantId: channel.covenantId,
+                      authorizingInput: 0,
+                      scriptPublicKey: claimScriptPublicKey,
+                      value: "750",
+                      claimedCumulativeAmount: "250",
+                    },
+                    terminalOutput: null,
+                    acceptance: claimAcceptance,
+                  },
+                ],
+              },
+            ],
+          };
+
+    const refund = await client.refundChannel(channel.id);
+
+    expect(refund.channel.status).toBe("refunded");
+    expect(refund.channel.claimedCumulativeAmount).toBe("250");
+    await expect(store.loadRefundAttempt(channel.id)).resolves.toMatchObject({
+      activeOutpoint: claimOutpoint,
+      fundingAmount: "750",
+      status: "applied",
+    });
+  });
+
+  it("rejects a terminal lineage output sent outside the configured refund script", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({ provider, store });
+    const payment = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+      { url: "https://api.example.test/data" },
+    );
+    const channel = payment.channel!;
+    const refundTransactionId = "7a".repeat(32);
+    const acceptance = acceptedEvidence(
+      refundTransactionId,
+      CONFIRMATION_THRESHOLD,
+      "7b".repeat(32),
+    );
+    provider.lineageDiscovery = (request) => ({
+      fromCheckpoint: request.lineage.checkpoint,
+      checkpoint: acceptance.checkpoint,
+      continuity: "complete",
+      removedChainBlockHashes: [],
+      addedChainBlocks: [
+        {
+          blockHash: acceptance.acceptingBlockHash,
+          transitions: [
+            {
+              kind: "refund",
+              covenantId: channel.covenantId,
+              templateId: channel.templateId,
+              consumedOutpoint: channel.activeOutpoint,
+              transactionId: refundTransactionId,
+              authorizedSuccessorCount: 0,
+              successor: null,
+              terminalOutput: {
+                index: 0,
+                scriptPublicKey: "0000ff",
+                value: channel.fundingAmount,
+              },
+              acceptance,
+            },
+          ],
+        },
+      ],
+    });
+
+    await expect(client.reconcileChannel(channel.id)).rejects.toThrow(
+      "configured refund script",
+    );
+    await expect(store.loadChannels({})).resolves.toMatchObject([
+      { id: channel.id, status: "active" },
+    ]);
+  });
+
+  it("rolls back a removed confirmed refund and permits a refund-only retry", async () => {
+    const provider = new FakeFundingProvider();
+    const store = new MemoryChannelStore();
+    const client = makeClient({
+      provider,
+      store,
+      refundBuilder: {
+        async buildRefundTransaction(request) {
+          await request.signDigest("dd".repeat(32));
+          return {
+            transaction: "ab".repeat(32),
+            transactionId: REFUND_TX,
+            refundAmount: request.refundAmount,
+          };
+        },
+      },
+    });
+    const payment = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+      { url: "https://api.example.test/data" },
+    );
+    provider.daa = "1001";
+    const first = await client.refundChannel(payment.channel!.id);
+    expect(first.channel.status).toBe("refunded");
+    await expect(
+      store.loadRefundAttempt(payment.channel!.id),
+    ).resolves.toMatchObject({
+      status: "applied",
+    });
+
+    provider.lineageDiscovery = (request) =>
+      request.lineage.currentHead === null
+        ? {
+            fromCheckpoint: request.lineage.checkpoint,
+            checkpoint: request.lineage.checkpoint,
+            continuity: "complete",
+            removedChainBlockHashes: [
+              acceptedEvidence(REFUND_TX).acceptingBlockHash,
+            ],
+            addedChainBlocks: [],
+          }
+        : {
+            fromCheckpoint: request.lineage.checkpoint,
+            checkpoint: request.lineage.checkpoint,
+            continuity: "complete",
+            removedChainBlockHashes: [],
+            addedChainBlocks: [],
+          };
+
+    await expect(client.listRefundableChannels()).resolves.toMatchObject([
+      { id: payment.channel!.id, status: "refundable" },
+    ]);
+    await expect(
+      store.loadRefundAttempt(payment.channel!.id),
+    ).resolves.toBeUndefined();
+
+    const second = await client.refundChannel(payment.channel!.id);
+    expect(second.channel.status).toBe("refunded");
+    expect(provider.sendCount).toBe(3); // genesis plus both refund broadcasts
+    await expect(
+      store.loadRefundAttempt(payment.channel!.id),
+    ).resolves.toMatchObject({
+      status: "applied",
+    });
+  });
+
   it("does not mark a channel refunded for broadcast-only refund submission", async () => {
     const provider = new FakeFundingProvider();
-    provider.daa = "1001";
     provider.sendFinality = "broadcast";
     const store = new MemoryChannelStore();
     const client = makeClient({
@@ -2051,9 +3727,8 @@ describe("direct-mode client", () => {
       refundReconciler: {
         async reconcileRefund(attempt) {
           return {
-            status: "unknown",
             transactionId: attempt.transactionId,
-            reason: "not yet indexed",
+            evidence: unknownEvidence(attempt.transactionId),
           };
         },
       },
@@ -2074,6 +3749,7 @@ describe("direct-mode client", () => {
         url: "https://api.example.test/data",
       },
     );
+    provider.daa = "1001";
 
     const refund = await client.refundChannel(payment.channel!.id);
 
@@ -2091,7 +3767,6 @@ describe("direct-mode client", () => {
       "refund attempt is unresolved",
     );
     const sendsBeforeReconcile = provider.sendCount;
-    provider.utxos.length = 0;
     await expect(
       client.reconcileRefund(payment.channel!.id),
     ).resolves.toMatchObject({
@@ -2110,7 +3785,6 @@ describe("direct-mode client", () => {
 
   it("rejects refund transactions whose amount differs from the signed amount", async () => {
     const provider = new FakeFundingProvider();
-    provider.daa = "1001";
     provider.sendFinality = "accepted";
     const store = new MemoryChannelStore();
     const client = makeClient({
@@ -2133,12 +3807,42 @@ describe("direct-mode client", () => {
         url: "https://api.example.test/data",
       },
     );
+    provider.daa = "1001";
 
     await expect(client.refundChannel(payment.channel!.id)).rejects.toThrow(
       "refund transaction amount",
     );
     const [stored] = await store.loadChannels({});
     expect(stored?.status).toBe("active");
+  });
+
+  it("rejects channels detached from their immutable launch manifest", async () => {
+    const provider = new FakeFundingProvider();
+    const client = makeClient({ provider, store: new MemoryChannelStore() });
+    const payment = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+      { url: "https://api.example.test/data" },
+    );
+    const wrongEvidence = structuredClone(payment.channel!);
+    wrongEvidence.lineage.manifest.genesis.acceptance.acceptingBlockHash =
+      "ac".repeat(32);
+    const wrongAuthorizer = structuredClone(payment.channel!);
+    wrongAuthorizer.lineage.manifest.genesis.authorizingInput = {
+      txid: "ad".repeat(32),
+      index: 0,
+    };
+    const wrongSource = structuredClone(payment.channel!);
+    wrongSource.lineage.manifest.source.sha256 = "ae".repeat(32);
+
+    expect(() => new MemoryChannelStore([wrongEvidence])).toThrow(
+      "immutable covenant launch manifest",
+    );
+    expect(() => new MemoryChannelStore([wrongAuthorizer])).toThrow(
+      "immutable covenant launch manifest",
+    );
+    expect(() => new MemoryChannelStore([wrongSource])).toThrow(
+      "immutable covenant launch manifest",
+    );
   });
 
   it("atomically applies a durable refund attempt only against its captured head", async () => {
@@ -2160,6 +3864,11 @@ describe("direct-mode client", () => {
       refundAmount: channel.fundingAmount,
       transaction: "ab".repeat(32),
       transactionId: REFUND_TX,
+      requiredConfirmations: CONFIRMATION_THRESHOLD,
+      refundScriptPublicKey: new FakeAddressCodec().scriptPublicKeyForAddress(
+        channel.config.refundAddress,
+        channel.config.network,
+      ),
       status: "pending",
     };
 
@@ -2182,7 +3891,7 @@ describe("direct-mode client", () => {
       "open refund",
     );
     expect(() => new MemoryChannelStore([changed], [attempt])).toThrow(
-      "does not match channel state",
+      "derived covenant lineage index",
     );
     expect(
       () =>
@@ -2195,13 +3904,13 @@ describe("direct-mode client", () => {
       store.applyRefundAttempt({
         channelId: channel.id,
         transactionId: REFUND_TX,
-        finality: "broadcast" as never,
+        acceptance: acceptedEvidence(REFUND_TX, 29),
       }),
-    ).rejects.toThrow("accepted finality");
+    ).rejects.toThrow("confirmation threshold");
     const applied = await store.applyRefundAttempt({
       channelId: channel.id,
       transactionId: REFUND_TX,
-      finality: "accepted",
+      acceptance: acceptedEvidence(REFUND_TX),
     });
     expect(applied.channel.status).toBe("refunded");
     expect(applied.attempt.status).toBe("applied");
@@ -2218,7 +3927,7 @@ describe("direct-mode client", () => {
       store.applyRefundAttempt({
         channelId: channel.id,
         transactionId: "67".repeat(32),
-        finality: "accepted",
+        acceptance: acceptedEvidence("67".repeat(32)),
       }),
     ).rejects.toThrow("transaction id does not match");
     await expect(store.loadRefundAttempt(channel.id)).resolves.toMatchObject({
@@ -2228,7 +3937,6 @@ describe("direct-mode client", () => {
 
   it("recovers a pending refund after a send exception and is idempotent", async () => {
     const provider = new FakeFundingProvider();
-    provider.daa = "1001";
     provider.sendError = new Error("transport lost after submission");
     const store = new MemoryChannelStore();
     const refundBuilder: RefundTransactionBuilder = {
@@ -2246,6 +3954,7 @@ describe("direct-mode client", () => {
       encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
       { url: "https://api.example.test/data" },
     );
+    provider.daa = "1001";
 
     await expect(client.refundChannel(payment.channel!.id)).rejects.toThrow(
       "transport lost",
@@ -2273,16 +3982,15 @@ describe("direct-mode client", () => {
       refundBuilder,
     });
     await expect(restarted.refundChannel(payment.channel!.id)).rejects.toThrow(
-      "refund attempt is unresolved",
+      "trusted refund reconciliation adapter is required",
     );
     const reconciler: RefundReconciler = {
       async reconcileRefund(attempt) {
         expect(attempt.transactionId).toBe(REFUND_TX);
         expect(attempt.transaction).toBe("ab".repeat(32));
         return {
-          status: "accepted",
           transactionId: attempt.transactionId,
-          finality: "accepted",
+          evidence: acceptedEvidence(attempt.transactionId),
         };
       },
     };
@@ -2304,13 +4012,86 @@ describe("direct-mode client", () => {
       restartedStore.loadRefundAttempt(payment.channel!.id),
     ).resolves.toMatchObject({
       status: "applied",
-      finality: "accepted",
+      finality: "confirmed",
+    });
+  });
+
+  it("keeps unknown refunds reserved and releases only trusted absent artifacts", async () => {
+    const provider = new FakeFundingProvider();
+    provider.sendError = new Error("transport lost after submission");
+    const store = new MemoryChannelStore();
+    let evidence: TrustedTransactionEvidence = unknownEvidence(REFUND_TX);
+    const client = makeClient({
+      provider,
+      store,
+      refundBuilder: {
+        async buildRefundTransaction(request) {
+          await request.signDigest("dd".repeat(32));
+          return {
+            transaction: "ab".repeat(32),
+            transactionId: REFUND_TX,
+            refundAmount: request.refundAmount,
+          };
+        },
+      },
+      refundReconciler: {
+        async reconcileRefund(attempt) {
+          return { transactionId: attempt.transactionId, evidence };
+        },
+      },
+    });
+    const payment = await client.createPayment(
+      encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+      { url: "https://api.example.test/data" },
+    );
+    provider.daa = "1001";
+
+    await expect(client.refundChannel(payment.channel!.id)).rejects.toThrow(
+      "transport lost",
+    );
+    provider.sendError = undefined;
+    await expect(
+      client.reconcileRefund(payment.channel!.id),
+    ).resolves.toMatchObject({ finality: "unknown", accepted: false });
+    await expect(
+      store.loadRefundAttempt(payment.channel!.id),
+    ).resolves.toMatchObject({ status: "pending" });
+
+    evidence = {
+      status: "absent",
+      transactionId: REFUND_TX,
+      reason: "an unrelated outpoint was spent",
+      proof: {
+        kind: "confirmed-conflicting-spend",
+        spentOutpoint: { txid: "99".repeat(32), index: 7 },
+        conflictingTransaction: acceptedEvidence("98".repeat(32)),
+      },
+    };
+    await expect(
+      client.reconcileRefund(payment.channel!.id),
+    ).resolves.toMatchObject({ finality: "unknown", accepted: false });
+    await expect(
+      store.loadRefundAttempt(payment.channel!.id),
+    ).resolves.toMatchObject({ status: "pending" });
+
+    evidence = absentEvidence(REFUND_TX);
+    await expect(
+      client.reconcileRefund(payment.channel!.id),
+    ).resolves.toMatchObject({ finality: "absent", accepted: false });
+    await expect(
+      store.loadRefundAttempt(payment.channel!.id),
+    ).resolves.toBeUndefined();
+    await expect(
+      client.refundChannel(payment.channel!.id),
+    ).resolves.toMatchObject({
+      transactionId: REFUND_TX,
+      accepted: true,
+      channel: { status: "refunded" },
     });
   });
 
   it("fails closed when the refund transaction id does not match", async () => {
     const provider = new FakeFundingProvider();
-    provider.daa = "1001";
     const store = new MemoryChannelStore();
     const client = makeClient({
       provider,
@@ -2328,9 +4109,8 @@ describe("direct-mode client", () => {
       refundReconciler: {
         async reconcileRefund() {
           return {
-            status: "accepted",
             transactionId: "69".repeat(32),
-            finality: "confirmed",
+            evidence: acceptedEvidence("69".repeat(32)),
           };
         },
       },
@@ -2339,6 +4119,7 @@ describe("direct-mode client", () => {
       encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
       { url: "https://api.example.test/data" },
     );
+    provider.daa = "1001";
 
     await expect(client.refundChannel(payment.channel!.id)).rejects.toThrow(
       "transaction id does not match",
@@ -2363,37 +4144,76 @@ function makeClient(options: {
   fundingSource?: FundingSourceKind;
   fetch?: FetchLike;
   verifyVoucherSignature?: (
-    voucher: { covenantId: string; amount: string; signature: string },
+    voucher: {
+      covenantId: string;
+      authorizedCumulativeAmount: string;
+      signature: string;
+    },
     channel: DirectModeChannel,
   ) => boolean;
   refundBuilder?: RefundTransactionBuilder;
   refundReconciler?: RefundReconciler;
   fundingTransitionReconciler?: FundingTransitionReconciler;
+  exactPaymentReconciler?: ExactPaymentReconciler;
   allowMainnet?: boolean;
   supportedNetworks?: readonly NetworkId[];
   supportedSchemes?: readonly PaymentScheme[];
   fundingPolicy?: FundingPolicy;
+  signer?: FakeSigner;
+  useDefaultBatchPolicy?: boolean;
 }): DirectModeClient {
   const provider = options.provider ?? new FakeFundingProvider();
+  const batchPayment =
+    options.fundingPolicy?.batchPayment ??
+    (options.useDefaultBatchPolicy === false
+      ? undefined
+      : defaultBatchPaymentPolicy(provider));
   return new DirectModeClient({
     fundingProvider: provider,
-    signer: new FakeSigner(),
+    signer: options.signer ?? new FakeSigner(),
     store: options.store ?? new MemoryChannelStore(),
     addressCodec: new FakeAddressCodec(),
-    fundingPolicy:
-      options.fundingPolicy ??
-      (options.fundingSource
+    fundingPolicy: {
+      ...options.fundingPolicy,
+      ...(options.fundingSource
         ? { requiredSource: options.fundingSource }
-        : undefined),
+        : {}),
+      ...(batchPayment ? { batchPayment } : {}),
+    },
     fetch: options.fetch as never,
     verifyVoucherSignature: options.verifyVoucherSignature,
     refundBuilder: options.refundBuilder,
     refundReconciler: options.refundReconciler,
     fundingTransitionReconciler: options.fundingTransitionReconciler,
+    exactPaymentReconciler: options.exactPaymentReconciler,
+    confirmationThreshold: CONFIRMATION_THRESHOLD,
     allowMainnet: options.allowMainnet,
     supportedNetworks: options.supportedNetworks,
     supportedSchemes: options.supportedSchemes,
   });
+}
+
+function defaultBatchPaymentPolicy(
+  provider: FakeFundingProvider,
+): BatchPaymentAuthorizationPolicy {
+  return {
+    maximumBatchChargeSompi: "1000000000",
+    maximumInitialDepositSompi: "1000000000",
+    maximumTopUpSompi: "1000000000",
+    maximumCumulativeAuthorizationSompi: "1000000000",
+    maximumTotalExposureSompi: "1000000000",
+    minimumRefundLeadDaa: "1",
+    maximumRefundHorizonDaa: "499999999999",
+    allowedOrigins: ["https://api.example.test", MCP_AUDIENCE],
+    allowedResources: [
+      "https://api.example.test/data",
+      "https://api.example.test/file",
+      "mcp://tool/download",
+    ],
+    allowedPayTo: ["kaspatest:payout"],
+    allowedServerPublicKeys: [SERVER_KEY],
+    allowedFundingSources: [provider.sourceKind],
+  };
 }
 
 function makeRequired(input: {
@@ -2401,8 +4221,8 @@ function makeRequired(input: {
   minDepositSompi?: string;
   claimReserveSompi?: string;
   channelState?: ChannelState;
-  voucherState?: { covenantId?: string; amount: string; signature: string };
   extensions?: PaymentRequired["extensions"];
+  mcpErrorChargeSompi?: string;
 }): PaymentRequired {
   return {
     x402Version: X402_VERSION,
@@ -2418,25 +4238,17 @@ function makeRequired(input: {
         payTo: "kaspatest:payout",
         maxTimeoutSeconds: 60,
         extra: {
-          binding: "kaspa-escrow-v2",
-          templateId: "kaspa-x402-escrow-v2",
+          binding: "kaspa-escrow-v3",
+          templateId: "kaspa-x402-escrow-v4",
           serverPublicKey: SERVER_KEY,
           minDepositSompi: input.minDepositSompi ?? "1000",
           claimReserveSompi: input.claimReserveSompi ?? "10",
           refundTimeoutDaa: "1000",
-          ...(input.channelState ? { channelState: input.channelState } : {}),
-          ...(input.voucherState
-            ? {
-                voucherState: {
-                  covenantId:
-                    input.voucherState.covenantId ??
-                    input.channelState?.covenantId ??
-                    COVENANT_ID,
-                  amount: input.voucherState.amount,
-                  signature: input.voucherState.signature,
-                },
-              }
+          securityContextHash: "88".repeat(32),
+          ...(input.mcpErrorChargeSompi
+            ? { mcpErrorChargeSompi: input.mcpErrorChargeSompi }
             : {}),
+          ...(input.channelState ? { channelState: input.channelState } : {}),
         },
       } satisfies BatchPaymentRequirements,
     ],
@@ -2598,7 +4410,6 @@ function makeSettlement(
         ...channelState(
           channel,
           addAmounts(channel.chargedCumulativeAmount, chargedAmount),
-          channel.signedMaxClaimable,
         ),
         ...stateOverrides,
       },
@@ -2643,8 +4454,7 @@ function voucherBearingPayload(
 
 function channelState(
   channel: DirectModeChannel,
-  chargedCumulativeAmount: string,
-  signedMaxClaimable: string,
+  authorizedCumulativeAmount: string,
 ): ChannelState {
   return {
     channelId: channel.id,
@@ -2652,15 +4462,14 @@ function channelState(
     activeOutpoint: channel.activeOutpoint,
     activeScriptPublicKey: channel.activeScriptPublicKey,
     fundingAmount: channel.fundingAmount,
-    chargedCumulativeAmount,
+    authorizedCumulativeAmount,
     claimedCumulativeAmount: channel.claimedCumulativeAmount,
-    signedMaxClaimable,
   };
 }
 
-function v2EscrowScriptPublicKey(
+function v4EscrowScriptPublicKey(
   channel: DirectModeChannel,
-  settledTotal: string,
+  claimedCumulativeAmount: string,
 ): string {
   const codec = new FakeAddressCodec();
   return serializedScriptPublicKey(
@@ -2677,7 +4486,7 @@ function v2EscrowScriptPublicKey(
         ),
       ),
       timeoutDaa: channel.config.refundTimeoutDaa,
-      settledTotal,
+      claimedCumulativeAmount,
     }),
   );
 }
@@ -2715,6 +4524,10 @@ class FakeFundingProvider implements FundingProvider {
   readonly sourceKind: FundingSourceKind;
   readonly deposits: Array<{ amount: string; channelId: string }> = [];
   readonly topUps: Array<{ targetFundingAmount: string }> = [];
+  readonly batchAuthorizations: BatchPaymentAuthorizationIntent[] = [];
+  batchAuthorizationApproval?: (
+    intent: BatchPaymentAuthorizationIntent,
+  ) => { intentDigest: Hash32Hex } | undefined;
   readonly exactPayments: Array<{
     profile: ExactPaymentRequest["profile"];
     amount: string;
@@ -2724,16 +4537,28 @@ class FakeFundingProvider implements FundingProvider {
     authorizationExpiresAt?: string;
     head?: ExactPaymentRequest["head"];
   }> = [];
+  readonly exactArtifacts = new Map<
+    string,
+    { intentHash: string; result: ExactTransactionPaymentResult }
+  >();
+  readonly exactFinalizations: Array<{
+    attemptId: string;
+    transactionId: string;
+    outcome: "accepted" | "absent";
+  }> = [];
   readonly utxos: FundingProviderUtxo[] = [];
   readonly pendingFunding = new Map<
     string,
     { transactionId: string; successor: FundingProviderUtxo }
   >();
-  depositMode: "outpoint" | "txid-only-ambiguous" | "outpoint-underfunded" =
-    "outpoint";
-  sendFinality: SendTransactionResult["finality"] = "accepted";
+  depositMode:
+    | "outpoint"
+    | "txid-only-ambiguous"
+    | "outpoint-underfunded"
+    | "outpoint-overfunded" = "outpoint";
+  sendFinality: "broadcast" | "accepted" | "confirmed" = "accepted";
   sendError?: Error;
-  fundingSendFinality: SendTransactionResult["finality"] = "accepted";
+  fundingSendFinality: "broadcast" | "accepted" | "confirmed" = "accepted";
   fundingSendError?: Error;
   genesisTotalOutputCount = 1;
   genesisAuthorizedOutputCount = 1;
@@ -2741,7 +4566,13 @@ class FakeFundingProvider implements FundingProvider {
   exactMode: "transaction" | "artifactless" = "transaction";
   omitExactTransactionId = false;
   exactTransactionOutputIndex?: number;
-  daa = "1000";
+  identityCount = 0;
+  daa = "100";
+  lineageDiscovery?: (
+    request: Parameters<
+      NonNullable<FundingProvider["discoverCovenantLineage"]>
+    >[0],
+  ) => CovenantSelectedChainUpdate;
 
   constructor(
     sourceKind: FundingSourceKind = "hot-wallet",
@@ -2752,10 +4583,21 @@ class FakeFundingProvider implements FundingProvider {
   }
 
   async getPublicIdentity() {
+    this.identityCount += 1;
     return { address: "kaspatest:refund", publicKey: CLIENT_KEY };
   }
 
-  async authorizeExactPayment(_request: ExactTransactionPaymentRequest) {}
+  async authorizeBatchPayment(request: {
+    intent: Readonly<BatchPaymentAuthorizationIntent>;
+    intentDigest: Hash32Hex;
+  }) {
+    this.batchAuthorizations.push(structuredClone(request.intent));
+    return (
+      this.batchAuthorizationApproval?.(request.intent) ?? {
+        intentDigest: request.intentDigest,
+      }
+    );
+  }
 
   async prepareEscrowDeposit(request: EscrowDepositRequest) {
     this.deposits.push({
@@ -2764,7 +4606,11 @@ class FakeFundingProvider implements FundingProvider {
     });
     const outpoint = { txid: FUNDING_TX, index: this.deposits.length - 1 };
     const amount =
-      this.depositMode === "outpoint-underfunded" ? "50" : request.amount;
+      this.depositMode === "outpoint-underfunded"
+        ? "50"
+        : this.depositMode === "outpoint-overfunded"
+          ? "2000"
+          : request.amount;
     const successor = {
       outpoint,
       covenantId: COVENANT_ID,
@@ -2776,6 +4622,7 @@ class FakeFundingProvider implements FundingProvider {
       return {
         transaction: "ad".repeat(32),
         transactionId: FUNDING_TX,
+        inputOutpoints: [{ txid: "79".repeat(32), index: 0 }],
         successor: {
           ...successor,
           outpoint: { txid: "56".repeat(32), index: 10 },
@@ -2790,12 +4637,22 @@ class FakeFundingProvider implements FundingProvider {
     return {
       transaction: "ad".repeat(32),
       transactionId: FUNDING_TX,
+      inputOutpoints: [{ txid: "79".repeat(32), index: 0 }],
       successor,
       fundingSource: this.sourceKind,
     };
   }
 
   async payExactTransaction(request: ExactTransactionPaymentRequest) {
+    const cached = this.exactArtifacts.get(request.attemptId.toLowerCase());
+    if (cached) {
+      if (
+        cached.intentHash.toLowerCase() !== request.intentHash.toLowerCase()
+      ) {
+        throw new Error("exact attempt intent changed before signing");
+      }
+      return structuredClone(cached.result);
+    }
     this.exactPayments.push({
       profile: request.profile,
       amount: request.amount,
@@ -2831,7 +4688,7 @@ class FakeFundingProvider implements FundingProvider {
       inputIndex: request.profile === "additive" ? 1 : 0,
       expiresAt,
     });
-    return {
+    const result = {
       transaction: EXACT_TRANSACTION_ARTIFACT,
       transactionEncoding: "kaspa-sdk-safe-json-v2.0.0" as const,
       ...(this.omitExactTransactionId ? {} : { transactionId: EXACT_TX_ID }),
@@ -2843,9 +4700,43 @@ class FakeFundingProvider implements FundingProvider {
         digest,
         signature: "ab".repeat(64),
       },
+      inputOutpoints: [
+        request.head?.expectedHeadOutpoint ?? {
+          txid: "79".repeat(32),
+          index: 0,
+        },
+      ],
       payerAddress: "kaspatest:refund",
       fundingSource: this.sourceKind,
     } as ExactTransactionPaymentResult;
+    this.exactArtifacts.set(request.attemptId.toLowerCase(), {
+      intentHash: request.intentHash,
+      result: structuredClone(result),
+    });
+    return result;
+  }
+
+  async finalizeExactPaymentAttempt(request: {
+    attemptId: string;
+    transactionId: string;
+    outcome: "accepted" | "absent";
+  }) {
+    const cached = this.exactArtifacts.get(request.attemptId.toLowerCase());
+    if (!cached || cached.result.transactionId !== request.transactionId) {
+      throw new Error(
+        "exact provider finalization does not match cached artifact",
+      );
+    }
+    if (
+      !this.exactFinalizations.some(
+        (item) =>
+          item.attemptId === request.attemptId &&
+          item.transactionId === request.transactionId &&
+          item.outcome === request.outcome,
+      )
+    ) {
+      this.exactFinalizations.push({ ...request });
+    }
   }
 
   async prepareEscrowTopUp(request: {
@@ -2868,25 +4759,33 @@ class FakeFundingProvider implements FundingProvider {
     return {
       transaction: "ae".repeat(32),
       transactionId: outpoint.txid,
+      inputOutpoints: [request.channel.activeOutpoint],
       successor,
       fundingSource: this.sourceKind,
     };
   }
 
   async getUtxos(addresses: readonly string[]) {
-    return this.utxos.filter(
-      (utxo) => utxo.address && addresses.includes(utxo.address),
-    );
+    return this.utxos
+      .filter((utxo) => utxo.address && addresses.includes(utxo.address))
+      .map((utxo) => ({
+        ...utxo,
+        acceptance: utxo.acceptance ?? acceptedEvidence(utxo.outpoint.txid),
+      }));
   }
 
   async getUtxo(outpoint: { txid: string; index: number }) {
-    return (
-      this.utxos.find(
-        (utxo) =>
-          utxo.outpoint.txid.toLowerCase() === outpoint.txid.toLowerCase() &&
-          utxo.outpoint.index === outpoint.index,
-      ) ?? null
+    const utxo = this.utxos.find(
+      (utxo) =>
+        utxo.outpoint.txid.toLowerCase() === outpoint.txid.toLowerCase() &&
+        utxo.outpoint.index === outpoint.index,
     );
+    return utxo
+      ? {
+          ...utxo,
+          acceptance: utxo.acceptance ?? acceptedEvidence(utxo.outpoint.txid),
+        }
+      : null;
   }
 
   async verifyCovenantGenesis(request: {
@@ -2901,6 +4800,8 @@ class FakeFundingProvider implements FundingProvider {
       genesisAmount: request.utxo.amount,
       totalOutputCount: this.genesisTotalOutputCount,
       authorizedOutputCount: this.genesisAuthorizedOutputCount,
+      acceptance:
+        request.utxo.acceptance ?? acceptedEvidence(request.utxo.outpoint.txid),
     };
   }
 
@@ -2916,6 +4817,25 @@ class FakeFundingProvider implements FundingProvider {
       successorScriptPublicKey: request.successor.scriptPublicKey,
       successorAmount: request.successor.amount,
       authorizedSuccessorCount: 1,
+      authorizingInput: 0,
+      acceptance:
+        request.successor.acceptance ??
+        acceptedEvidence(request.successor.outpoint.txid),
+    };
+  }
+
+  async discoverCovenantLineage(
+    request: Parameters<
+      NonNullable<FundingProvider["discoverCovenantLineage"]>
+    >[0],
+  ) {
+    if (this.lineageDiscovery) return this.lineageDiscovery(request);
+    return {
+      fromCheckpoint: request.lineage.checkpoint,
+      checkpoint: request.lineage.checkpoint,
+      continuity: "complete" as const,
+      removedChainBlockHashes: [],
+      addedChainBlocks: [],
     };
   }
 
@@ -2930,12 +4850,27 @@ class FakeFundingProvider implements FundingProvider {
       if (this.fundingSendError) throw this.fundingSendError;
       const finality = this.fundingSendFinality;
       if (finality === "accepted" || finality === "confirmed") {
-        this.utxos.push(funding.successor);
+        this.utxos.push({
+          ...funding.successor,
+          acceptance: acceptedEvidence(funding.transactionId),
+        });
       }
-      return { transactionId: funding.transactionId, finality };
+      return {
+        transactionId: funding.transactionId,
+        evidence:
+          finality === "broadcast"
+            ? unknownEvidence(funding.transactionId)
+            : acceptedEvidence(funding.transactionId),
+      };
     }
     if (this.sendError) throw this.sendError;
-    return { transactionId: REFUND_TX, finality: this.sendFinality };
+    return {
+      transactionId: REFUND_TX,
+      evidence:
+        this.sendFinality === "broadcast"
+          ? unknownEvidence(REFUND_TX)
+          : acceptedEvidence(REFUND_TX),
+    };
   }
 
   async estimateFees(_request: FeeEstimateRequest) {
@@ -2944,7 +4879,12 @@ class FakeFundingProvider implements FundingProvider {
 }
 
 class FakeSigner {
+  keyGenerationCount = 0;
+  voucherSignCount = 0;
+  presentationSignCount = 0;
+
   async generateChannelKey(): Promise<ChannelKey> {
+    this.keyGenerationCount += 1;
     return { publicKey: CLIENT_KEY, privateKey: "client-key" };
   }
 
@@ -2957,6 +4897,12 @@ class FakeSigner {
   }
 
   async signVoucher({ digest }: VoucherSignRequest) {
+    this.voucherSignCount += 1;
+    return `${digest}${digest}`;
+  }
+
+  async signBatchPresentation({ digest }: { digest: Hash32Hex }) {
+    this.presentationSignCount += 1;
     return `${digest}${digest}`;
   }
 

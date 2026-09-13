@@ -5,7 +5,11 @@ import {
   payToScriptHashScript,
   serializedScriptPublicKey,
 } from "@kaspa-x402/covenant";
-import { handleGatewayRequest, runGatewayCanary } from "../src/gateway.js";
+import {
+  handleGatewayRequest,
+  readRequestJsonWithLimit,
+  runGatewayCanary,
+} from "../src/gateway.js";
 import { addressForScriptPublicKey } from "../src/kaspa-native.js";
 import {
   PAYMENT_REQUIRED_HEADER,
@@ -43,12 +47,13 @@ const BASE_ENV: Omit<GatewayEnv, "GATEWAY_STATE"> = {
   KASPA_X402_SERVER_PUBLIC_KEY:
     "bee817fbf708b7ad2b12530bcc99e285805ab64faeea22f6d31e2bbcb164edf9",
   KASPA_X402_SITE_BASE_URL: "https://kaspa-x402.org",
-  KASPA_X402_RELEASE_VERSION: "0.1.0-alpha.10",
+  KASPA_X402_RELEASE_VERSION: "1.0.0-rc.1",
   KASPA_X402_GATEWAY_BASE_URL: "https://demo.kaspa-x402.org",
 };
 
 describe("gateway canary", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -170,6 +175,28 @@ describe("gateway canary", () => {
     });
   });
 
+  it("keeps health shallow and omits configured upstream URLs", async () => {
+    const storage = new FakeStorage();
+    const fetchMock = vi.fn(async () => {
+      throw new Error("health must not call upstream services");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const env: GatewayEnv = {
+      ...BASE_ENV,
+      GATEWAY_STATE: fakeNamespace(storage),
+      KASPA_X402_CHAIN_BROADCAST_MODE: "pnn",
+      KASPA_X402_PNN_ENDPOINTS:
+        "wss://pnn.example.test/private/path?token=secret",
+    };
+
+    const health = await requestJson(env, "/health");
+
+    expect(health.status).toBe(200);
+    expect(JSON.stringify(health.body)).not.toContain("pnn.example.test");
+    expect(JSON.stringify(health.body)).not.toContain("token=secret");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("keeps supported and disabled responses independent of Kaspa REST", async () => {
     const storage = new FakeStorage();
     const fetchMock = vi.fn(async () => {
@@ -273,6 +300,100 @@ describe("gateway canary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(fetchesAfterAllowedRequest);
   });
 
+  it("caps protected requests across Worker isolates through shared state", async () => {
+    const storage = new FakeStorage();
+    const env: GatewayEnv = {
+      ...BASE_ENV,
+      GATEWAY_STATE: fakeNamespace(storage),
+      KASPA_X402_GLOBAL_CONCURRENCY: "1",
+    };
+    let releaseFirst!: () => void;
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const firstMayFinish = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let blockdagCalls = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      if (url !== "https://api-tn10.kaspa.org/info/blockdag")
+        throw new Error(`unexpected fetch ${url}`);
+      blockdagCalls += 1;
+      if (blockdagCalls === 1) {
+        markFirstStarted();
+        await firstMayFinish;
+      }
+      return Response.json({
+        networkName: "kaspa-testnet-10",
+        virtualDaaScore: "507000000",
+      });
+    });
+
+    const first = handleGatewayRequest(
+      new Request("https://demo.kaspa-x402.org/batch"),
+      env,
+      fakeContext(),
+    );
+    await firstStarted;
+    const rejected = await handleGatewayRequest(
+      new Request("https://demo.kaspa-x402.org/batch"),
+      env,
+      fakeContext(),
+    );
+
+    expect(rejected.status).toBe(503);
+    await expect(rejected.json()).resolves.toMatchObject({
+      ok: false,
+      error: "global_concurrency_exceeded",
+    });
+    expect(blockdagCalls).toBe(1);
+
+    releaseFirst();
+    await expect(first).resolves.toMatchObject({ status: 402 });
+    const callsAfterFirst = blockdagCalls;
+    await expect(
+      handleGatewayRequest(
+        new Request("https://demo.kaspa-x402.org/batch"),
+        env,
+        fakeContext(),
+      ),
+    ).resolves.toMatchObject({ status: 402 });
+    expect(blockdagCalls).toBeGreaterThan(callsAfterFirst);
+  });
+
+  it("fails closed before chain access when global admission is unavailable", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const storage = new FakeStorage();
+    const env: GatewayEnv = {
+      ...BASE_ENV,
+      GATEWAY_STATE: fakeNamespace(storage, {
+        admissionError: new Error("coordinator unavailable"),
+      }),
+    };
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await handleGatewayRequest(
+      new Request("https://demo.kaspa-x402.org/batch"),
+      env,
+      fakeContext(),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: "admission_unavailable",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("requires operator auth and keeps hosted exact disabled unless settlement is enabled", async () => {
     const storage = new FakeStorage();
     const env: GatewayEnv = {
@@ -290,6 +411,19 @@ describe("gateway canary", () => {
       fakeContext(),
     );
     expect(unauthorized.status).toBe(401);
+
+    const cleartext = await handleGatewayRequest(
+      new Request("http://demo.kaspa-x402.org/admin/exact-heads", {
+        headers: { authorization: "Bearer admin-token" },
+      }),
+      env,
+      fakeContext(),
+    );
+    expect(cleartext.status).toBe(400);
+    await expect(cleartext.json()).resolves.toMatchObject({
+      ok: false,
+      error: "https_required",
+    });
 
     const registered = await handleGatewayRequest(
       new Request("https://demo.kaspa-x402.org/admin/exact-heads/register", {
@@ -522,6 +656,32 @@ describe("gateway canary", () => {
   });
 });
 
+describe("gateway request transport budget", () => {
+  it("accepts the byte maximum and rejects maximum plus one while streaming", async () => {
+    await expect(
+      readRequestJsonWithLimit(
+        new Request("https://demo.kaspa-x402.org/admin", {
+          method: "POST",
+          body: '{"x":""}',
+        }),
+        8,
+        "test",
+      ),
+    ).resolves.toEqual({ x: "" });
+
+    await expect(
+      readRequestJsonWithLimit(
+        new Request("https://demo.kaspa-x402.org/admin", {
+          method: "POST",
+          body: '{"x":"a"}',
+        }),
+        8,
+        "test",
+      ),
+    ).rejects.toThrow("request body too large");
+  });
+});
+
 async function requestJson(
   env: GatewayEnv,
   path: string,
@@ -553,8 +713,8 @@ function stubCanaryFetches(): void {
         $id: "https://kaspa-x402.org/schemas/payment-required.schema.json",
       });
     }
-    if (url.startsWith("https://kaspa-x402.org/v0.1.0-alpha.10/release.json?")) {
-      return Response.json({ version: "0.1.0-alpha.10" });
+    if (url.startsWith("https://kaspa-x402.org/v1.0.0-rc.1/release.json?")) {
+      return Response.json({ version: "1.0.0-rc.1" });
     }
     if (url === "https://kaspa-x402.org/docs/") {
       return new Response("<!doctype html><h1>Docs</h1>", {
@@ -634,7 +794,10 @@ function fakeContext(): Pick<ExecutionContext, "waitUntil"> {
   };
 }
 
-function fakeNamespace(storage: GatewayStorage): GatewayEnv["GATEWAY_STATE"] {
+function fakeNamespace(
+  storage: GatewayStorage,
+  options: { admissionError?: Error } = {},
+): GatewayEnv["GATEWAY_STATE"] {
   const ledger = new GatewayLedger(storage);
   return {
     idFromName(name: string) {
@@ -642,6 +805,18 @@ function fakeNamespace(storage: GatewayStorage): GatewayEnv["GATEWAY_STATE"] {
     },
     get() {
       return {
+        acquirePublicAdmission(
+          token: string,
+          nowMs: number,
+          limit: number,
+          ttlMs: number,
+        ) {
+          if (options.admissionError) throw options.admissionError;
+          return ledger.acquirePublicAdmission(token, nowMs, limit, ttlMs);
+        },
+        releasePublicAdmission(token: string) {
+          return ledger.releasePublicAdmission(token);
+        },
         async fetch(_input: RequestInfo | URL, init?: RequestInit) {
           const request = JSON.parse(
             String(init?.body ?? "{}"),
@@ -649,7 +824,7 @@ function fakeNamespace(storage: GatewayStorage): GatewayEnv["GATEWAY_STATE"] {
           const value = await dispatchGatewayState(ledger, request);
           return Response.json({ ok: true, value });
         },
-      } as DurableObjectStub;
+      };
     },
   } as unknown as GatewayEnv["GATEWAY_STATE"];
 }

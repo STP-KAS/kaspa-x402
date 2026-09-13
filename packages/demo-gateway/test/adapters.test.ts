@@ -7,6 +7,7 @@ import {
   buildKip10AdditiveBorrowSignatureScript,
   buildKip10AdditiveRedeemScript,
   calculateKaspaStorageMass,
+  ESCROW_V4_LAUNCH_IDENTITY,
   payToScriptHashScript,
   serializedScriptPublicKey,
   transactionV1CovenantId,
@@ -19,6 +20,7 @@ import {
   NativeAddressCodec,
   NativeVoucherVerifier,
   RestExactHeadReconciler,
+  RestExactSettlementReconciler,
   RestExactTransactionVerifier,
   RestKaspaChainProvider,
   ScriptAddressBook,
@@ -28,8 +30,79 @@ import {
   encodeScriptAddress,
   scriptPublicKeyForAddress,
 } from "../src/kaspa-native.js";
-import type { ExactHeadRecord, ServerChannelRecord } from "@kaspa-x402/server";
-import { exactRequestAuthorizationDigest } from "@kaspa-x402/core";
+import type {
+  ExactHeadRecord,
+  ExactSettlementAttemptRecord,
+  ServerChannelRecord,
+} from "@kaspa-x402/server";
+import {
+  createCovenantLineageState,
+  exactRequestAuthorizationDigest,
+  type AcceptedTransactionEvidence,
+} from "@kaspa-x402/core";
+
+function acceptedEvidence(
+  transactionId: string,
+  confirmationCount = 30,
+): AcceptedTransactionEvidence {
+  return {
+    status: "accepted",
+    transactionId,
+    acceptingBlockHash: "ed".repeat(32),
+    acceptingBlockBlueScore: "971",
+    confirmationCount,
+    checkpoint: {
+      blockHash: "ee".repeat(32),
+      blueScore: "1000",
+      daaScore: "1000",
+    },
+  };
+}
+
+const REST_CHECKPOINT_HASH = "ee".repeat(32);
+const REST_ACCEPTING_HASH = "ed".repeat(32);
+
+function restCheckpointResponse(url: string): Response | undefined {
+  if (url === "https://api.example.test/info/blockdag") {
+    return Response.json({
+      networkName: "kaspa-testnet-10",
+      virtualDaaScore: "1000",
+      sink: REST_CHECKPOINT_HASH,
+    });
+  }
+  if (
+    url ===
+    `https://api.example.test/blocks/${REST_CHECKPOINT_HASH}?includeTransactions=false`
+  ) {
+    return Response.json({
+      header: { blueScore: "1000", daaScore: "1000" },
+      verboseData: { hash: REST_CHECKPOINT_HASH, isChainBlock: true },
+    });
+  }
+  if (
+    url ===
+    `https://api.example.test/blocks/${REST_ACCEPTING_HASH}?includeTransactions=false`
+  ) {
+    return Response.json({
+      header: { blueScore: "971", daaScore: "971" },
+      verboseData: { hash: REST_ACCEPTING_HASH, isChainBlock: true },
+    });
+  }
+  return undefined;
+}
+
+function pnnObservedBroadcast(transactionId: string) {
+  return {
+    transactionId,
+    finality: "accepted",
+    evidence: {
+      status: "unknown",
+      transactionId,
+      reason:
+        "PNN UTXO observation lacks an accepting-block checkpoint; reconcile through selected-chain V2",
+    },
+  } as const;
+}
 
 const originalFetch = globalThis.fetch;
 
@@ -127,12 +200,16 @@ describe("RestKaspaChainProvider", () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = input.toString();
       requests.push(url);
+      const checkpoint = restCheckpointResponse(url);
+      if (checkpoint) return Promise.resolve(checkpoint);
       if (url.includes(`/transactions/${txid}`)) {
         return Promise.resolve(
           Response.json({
             transaction_id: txid,
             version: 1,
             is_accepted: true,
+            accepting_block_hash: "ed".repeat(32),
+            accepting_block_blue_score: "971",
             inputs: [
               {
                 previous_outpoint_hash: authorizingTxid,
@@ -183,11 +260,105 @@ describe("RestKaspaChainProvider", () => {
       scriptPublicKey,
       finality: "accepted",
       covenantId,
+      acceptance: acceptedEvidence(txid, 1),
     });
-    expect(requests).toEqual([
-      addressUtxosPath,
+    expect(requests).toContain(addressUtxosPath);
+    expect(requests).toContainEqual(
       expect.stringContaining(`/transactions/${txid}`),
-    ]);
+    );
+    expect(requests).toContain(
+      `https://api.example.test/blocks/${REST_ACCEPTING_HASH}?includeTransactions=false`,
+    );
+    expect(requests.filter((url) => url.endsWith("/info/blockdag"))).toHaveLength(2);
+  });
+
+  it("retries a REST UTXO observation when its checkpoint changes", async () => {
+    const sinks = [
+      "a1".repeat(32),
+      "a2".repeat(32),
+      "a3".repeat(32),
+      "a3".repeat(32),
+    ];
+    let checkpointCalls = 0;
+    let utxoCalls = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.endsWith("/info/blockdag")) {
+        const sink = sinks[checkpointCalls++]!;
+        return Promise.resolve(
+          Response.json({
+            networkName: "kaspa-testnet-10",
+            virtualDaaScore: "1000",
+            sink,
+          }),
+        );
+      }
+      if (url.includes(`/blocks/${REST_ACCEPTING_HASH}?`)) {
+        return Promise.resolve(
+          Response.json({
+            header: { blueScore: "971", daaScore: "971" },
+            verboseData: {
+              hash: REST_ACCEPTING_HASH,
+              isChainBlock: true,
+            },
+          }),
+        );
+      }
+      if (url.includes("/blocks/")) {
+        const hash = new URL(url).pathname.split("/").at(-1)!;
+        return Promise.resolve(
+          Response.json({
+            header: { blueScore: "1000", daaScore: "1000" },
+            verboseData: { hash, isChainBlock: true },
+          }),
+        );
+      }
+      if (url.includes(`/transactions/${txid}`)) {
+        return Promise.resolve(
+          Response.json({
+            transaction_id: txid,
+            is_accepted: true,
+            accepting_block_hash: REST_ACCEPTING_HASH,
+            accepting_block_blue_score: "971",
+            outputs: [
+              {
+                index: 0,
+                amount: "1000",
+                script_public_key: scriptPublicKey.slice(4),
+              },
+            ],
+          }),
+        );
+      }
+      expect(url).toBe(addressUtxosPath);
+      utxoCalls += 1;
+      return Promise.resolve(
+        Response.json([
+          {
+            outpoint: { transactionId: txid, index: 0 },
+            utxoEntry: {
+              amount: "1000",
+              scriptPublicKey: { scriptPublicKey },
+            },
+          },
+        ]),
+      );
+    }) as typeof fetch;
+    const book = new ScriptAddressBook();
+    book.recordOutpoint({ txid, index: 0 }, scriptPublicKey, address);
+
+    const utxo = await new RestKaspaChainProvider(
+      new KaspaRestClient("https://api.example.test", { fetch: fetchMock }),
+      book,
+      "100",
+    ).getUtxo({ txid, index: 0 }, "kaspa:testnet-10");
+
+    expect(utxo?.acceptance).toMatchObject({
+      confirmationCount: 1,
+      checkpoint: { blockHash: sinks.at(-1) },
+    });
+    expect(checkpointCalls).toBe(4);
+    expect(utxoCalls).toBe(2);
   });
 
   it("does not accept historical transaction outputs when the outpoint is no longer unspent", async () => {
@@ -195,9 +366,21 @@ describe("RestKaspaChainProvider", () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = input.toString();
       requests.push(url);
+      const checkpoint = restCheckpointResponse(url);
+      if (checkpoint) return Promise.resolve(checkpoint);
       if (url.includes("/transactions/")) {
-        throw new Error(
-          "historical transaction lookup must not be used for funding verification",
+        return Promise.resolve(
+          Response.json({
+            transaction_id: txid,
+            is_accepted: true,
+            outputs: [
+              {
+                index: 0,
+                amount: "1000",
+                script_public_key: scriptPublicKey.slice(4),
+              },
+            ],
+          }),
         );
       }
       expect(url).toBe(addressUtxosPath);
@@ -217,7 +400,9 @@ describe("RestKaspaChainProvider", () => {
     ).getUtxo({ txid, index: 0 }, "kaspa:testnet-10");
 
     expect(utxo).toBeNull();
-    expect(requests).toEqual([addressUtxosPath]);
+    expect(requests.filter((url) => url === addressUtxosPath)).toHaveLength(1);
+    expect(requests.filter((url) => url.includes(`/transactions/${txid}`))).toHaveLength(1);
+    expect(requests.filter((url) => url.endsWith("/info/blockdag"))).toHaveLength(2);
   });
 
   it("resolves an unpersisted funding outpoint from its exact output script without scanning addresses", async () => {
@@ -238,12 +423,16 @@ describe("RestKaspaChainProvider", () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = input.toString();
       requests.push(url);
+      const checkpoint = restCheckpointResponse(url);
+      if (checkpoint) return Promise.resolve(checkpoint);
       if (url.includes(`/transactions/${txid}`)) {
         return Promise.resolve(
           Response.json({
             transaction_id: txid,
             version: 1,
             is_accepted: true,
+            accepting_block_hash: "ed".repeat(32),
+            accepting_block_blue_score: "971",
             inputs: [
               {
                 previous_outpoint_hash: authorizingTxid,
@@ -287,10 +476,8 @@ describe("RestKaspaChainProvider", () => {
     ).getUtxo({ txid, index: 0 }, "kaspa:testnet-10");
 
     expect(utxo?.covenantId).toBe(covenantId);
-    expect(requests).toEqual([
-      expect.stringContaining(`/transactions/${txid}`),
-      addressUtxosPath,
-    ]);
+    expect(requests[0]).toContain(`/transactions/${txid}`);
+    expect(requests).toContain(addressUtxosPath);
   });
 
   it("recomputes trusted singleton covenant genesis evidence", async () => {
@@ -343,6 +530,7 @@ describe("RestKaspaChainProvider", () => {
           amount: "1000",
           scriptPublicKey,
           finality: "accepted",
+          acceptance: acceptedEvidence(txid),
         },
         payment: {} as never,
       }),
@@ -354,6 +542,7 @@ describe("RestKaspaChainProvider", () => {
       genesisAmount: "1000",
       totalOutputCount: 1,
       authorizedOutputCount: 1,
+      acceptance: acceptedEvidence(txid),
     });
   });
 
@@ -412,6 +601,7 @@ describe("RestKaspaChainProvider", () => {
           amount: "1000",
           scriptPublicKey,
           finality: "accepted",
+          acceptance: acceptedEvidence(txid),
         },
         payment: {} as never,
       }),
@@ -480,6 +670,7 @@ describe("RestKaspaChainProvider", () => {
           amount: "2000",
           scriptPublicKey,
           finality: "accepted",
+          acceptance: acceptedEvidence(nextOutpoint.txid),
         },
         payment: {} as never,
       }),
@@ -490,6 +681,8 @@ describe("RestKaspaChainProvider", () => {
       successorScriptPublicKey: scriptPublicKey,
       successorAmount: "2000",
       authorizedSuccessorCount: 1,
+      authorizingInput: 0,
+      acceptance: acceptedEvidence(nextOutpoint.txid),
     });
   });
 
@@ -500,6 +693,8 @@ describe("RestKaspaChainProvider", () => {
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = input.toString();
+        const checkpoint = restCheckpointResponse(url);
+        if (checkpoint) return checkpoint;
         if (
           url.startsWith(`https://api.example.test/transactions/${exact.txid}`)
         ) {
@@ -529,7 +724,11 @@ describe("RestKaspaChainProvider", () => {
       "100",
     ).sendTransaction(exact.artifact);
 
-    expect(result).toEqual({ transactionId: exact.txid, finality: "accepted" });
+    expect(result).toEqual({
+      transactionId: exact.txid,
+      finality: "accepted",
+      evidence: acceptedEvidence(exact.txid, 1),
+    });
     const body = submitted as {
       transaction: { version: number; inputs: unknown[]; outputs: unknown[] };
       allowOrphan: boolean;
@@ -661,6 +860,63 @@ describe("RestExactHeadReconciler", () => {
   });
 });
 
+describe("RestExactSettlementReconciler", () => {
+  it("accepts only the persisted additive artifact and returns its charged delta", async () => {
+    const exact = exactTransactionFixture();
+    const fetchMock = vi.fn(async () => Response.json(exact.restTransaction)) as typeof fetch;
+    const attempt = exactSettlementAttemptFixture(exact);
+
+    await expect(
+      new RestExactSettlementReconciler(
+        new KaspaRestClient("https://api.example.test", { fetch: fetchMock }),
+      ).reconcileExactSettlement(attempt),
+    ).resolves.toEqual({
+      status: "accepted",
+      transactionId: exact.txid,
+      finality: "accepted",
+      paymentOutput: {
+        amount: "20000000",
+        scriptPublicKey: exact.headScriptPublicKey,
+      },
+      continuation: attempt.head!.successor,
+    });
+  });
+
+  it("keeps a missing transaction pending", async () => {
+    const exact = exactTransactionFixture();
+    const fetchMock = vi.fn(async () => new Response("missing", { status: 404 })) as typeof fetch;
+
+    await expect(
+      new RestExactSettlementReconciler(
+        new KaspaRestClient("https://api.example.test", { fetch: fetchMock }),
+      ).reconcileExactSettlement(exactSettlementAttemptFixture(exact)),
+    ).resolves.toMatchObject({
+      status: "unknown",
+      transactionId: exact.txid,
+    });
+  });
+
+  it("rejects accepted chain output evidence that differs from the signed artifact", async () => {
+    const exact = exactTransactionFixture();
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        ...exact.restTransaction,
+        outputs: exact.restTransaction.outputs.map((output, index) =>
+          index === 0 ? { ...output, amount: "120000001" } : output,
+        ),
+      }),
+    ) as typeof fetch;
+
+    await expect(
+      new RestExactSettlementReconciler(
+        new KaspaRestClient("https://api.example.test", { fetch: fetchMock }),
+      ).reconcileExactSettlement(exactSettlementAttemptFixture(exact)),
+    ).rejects.toThrow(
+      "accepted transaction output amount does not match exact artifact",
+    );
+  });
+});
+
 describe("KaspaPnnClient", () => {
   it("submits exact artifacts through PNN and waits for accepted payment evidence", async () => {
     const exact = exactTransactionFixture();
@@ -695,7 +951,7 @@ describe("KaspaPnnClient", () => {
       sleep: async () => undefined,
     }).submitTransaction(exact.artifact, book);
 
-    expect(result).toEqual({ transactionId: exact.txid, finality: "accepted" });
+    expect(result).toEqual(pnnObservedBroadcast(exact.txid));
     expect(submitted).toHaveLength(1);
     const request = submitted[0] as {
       allowOrphan: boolean;
@@ -772,7 +1028,7 @@ describe("KaspaPnnClient", () => {
         rpcFactory,
         sleep: async () => undefined,
       }).submitTransaction(exact.artifact, book),
-    ).resolves.toEqual({ transactionId: exact.txid, finality: "accepted" });
+    ).resolves.toEqual(pnnObservedBroadcast(exact.txid));
     expect(endpoints).toEqual([
       "wss://pnn-a.example.test/kaspa/testnet-10/wrpc/json",
       "wss://pnn-b.example.test/kaspa/testnet-10/wrpc/json",
@@ -805,7 +1061,276 @@ describe("KaspaPnnClient", () => {
         rpcFactory,
         sleep: async () => undefined,
       }).submitTransaction(exact.artifact, book),
-    ).resolves.toEqual({ transactionId: exact.txid, finality: "accepted" });
+    ).resolves.toEqual(pnnObservedBroadcast(exact.txid));
+  });
+
+  it("promotes REST acceptance only after PNN proves selected-chain depth", async () => {
+    const transactionId = "d1".repeat(32);
+    const acceptingBlockHash = "d2".repeat(32);
+    const selectedParentHash = "d3".repeat(32);
+    const checkpoint = {
+      blockHash: "d4".repeat(32),
+      blueScore: "1005",
+      daaScore: "1005",
+    };
+    let selectedCalls = 0;
+    const rpcFactory = mockPnnRpcFactory(() => ({
+      async connect() {},
+      async disconnect() {},
+      async getServerInfo() {
+        return { networkId: "testnet-10", isSynced: true };
+      },
+      async submitTransaction() {
+        throw new Error("unused");
+      },
+      async getUtxosByAddresses() {
+        throw new Error("unused");
+      },
+      async getBlockDagInfo() {
+        return { sink: checkpoint.blockHash };
+      },
+      async getBlock({ hash }) {
+        if (hash === acceptingBlockHash) {
+          return {
+            block: {
+              header: { blueScore: "971", daaScore: "971" },
+              verboseData: {
+                hash: acceptingBlockHash,
+                selectedParentHash,
+                isChainBlock: true,
+              },
+            },
+          };
+        }
+        expect(hash).toBe(checkpoint.blockHash);
+        return {
+          block: {
+            header: {
+              blueScore: checkpoint.blueScore,
+              daaScore: checkpoint.daaScore,
+            },
+            verboseData: {
+              hash: checkpoint.blockHash,
+              isChainBlock: true,
+            },
+          },
+        };
+      },
+      async getVirtualChainFromBlockV2(request) {
+        expect(request.minConfirmationCount).toBe(33);
+        expect(request.dataVerbosityLevel).toBe("Low");
+        selectedCalls += 1;
+        if (selectedCalls === 1) {
+          expect(request.startHash).toBe(selectedParentHash);
+          return {
+            removedChainBlockHashes: [],
+            addedChainBlockHashes: [acceptingBlockHash],
+            chainBlockAcceptedTransactions: [
+              {
+                chainBlockHeader: {
+                  hash: acceptingBlockHash,
+                  blueScore: "971",
+                  daaScore: "971",
+                },
+                acceptedTransactions: [{ transactionId }],
+              },
+            ],
+          };
+        }
+        expect(request.startHash).toBe(acceptingBlockHash);
+        return {
+          removedChainBlockHashes: [],
+          addedChainBlockHashes: [],
+          chainBlockAcceptedTransactions: [],
+        };
+      },
+    }));
+    const evidence: AcceptedTransactionEvidence = {
+      status: "accepted",
+      transactionId,
+      acceptingBlockHash,
+      acceptingBlockBlueScore: "971",
+      confirmationCount: 1,
+      checkpoint,
+    };
+
+    await expect(
+      new KaspaPnnClient({
+        endpoints: ["wss://pnn-a.example.test/kaspa/testnet-10/wrpc/json"],
+        timeoutMs: 50,
+        rpcFactory,
+      }).confirmAcceptedTransaction(evidence, 30),
+    ).resolves.toEqual({
+      ...evidence,
+      confirmationCount: 30,
+      checkpoint,
+    });
+  });
+
+  it("discovers a confirmed covenant successor while the selected-chain tip advances", async () => {
+    const current = batchChannel({});
+    const fixture = pnnLineageFixture(current);
+    const update = await new KaspaPnnClient({
+      endpoints: ["wss://pnn-a.example.test/kaspa/testnet-10/wrpc/json"],
+      timeoutMs: 50,
+      rpcFactory: mockPnnRpcFactory(() => fixture.rpc),
+    }).discoverCovenantLineage({
+      network: "kaspa:testnet-10",
+      covenantId: current.covenantId,
+      templateId: current.channelConfig.templateId,
+      lineage: current.lineage,
+      minConfirmationCount: 30,
+    });
+
+    expect(update).toMatchObject({
+      fromCheckpoint: current.lineage.checkpoint,
+      checkpoint: fixture.checkpoint,
+      continuity: "complete",
+      removedChainBlockHashes: [],
+      addedChainBlocks: [{
+        blockHash: fixture.acceptingBlockHash,
+        transitions: [{
+          kind: "claim",
+          transactionId: fixture.transactionId,
+          consumedOutpoint: current.activeOutpoint,
+          successor: {
+            outpoint: { txid: fixture.transactionId, index: 0 },
+            value: "900",
+            claimedCumulativeAmount: "100",
+          },
+          acceptance: {
+            confirmationCount: 30,
+            checkpoint: fixture.checkpoint,
+          },
+        }],
+      }],
+    });
+  });
+
+  it("rejects branching covenant successors from selected-chain V2", async () => {
+    const current = batchChannel({});
+    const fixture = pnnLineageFixture(current, true);
+    await expect(
+      new KaspaPnnClient({
+        endpoints: ["wss://pnn-a.example.test/kaspa/testnet-10/wrpc/json"],
+        timeoutMs: 50,
+        rpcFactory: mockPnnRpcFactory(() => fixture.rpc),
+      }).discoverCovenantLineage({
+        network: "kaspa:testnet-10",
+        covenantId: current.covenantId,
+        templateId: current.channelConfig.templateId,
+        lineage: current.lineage,
+        minConfirmationCount: 30,
+      }),
+    ).rejects.toThrow("ambiguous covenant successors");
+  });
+
+  it("rejects a durable-head spend carrying the wrong covenant identity", async () => {
+    const current = batchChannel({});
+    const fixture = pnnLineageFixture(current, false, "f4".repeat(32));
+    await expect(
+      new KaspaPnnClient({
+        endpoints: ["wss://pnn-a.example.test/kaspa/testnet-10/wrpc/json"],
+        timeoutMs: 50,
+        rpcFactory: mockPnnRpcFactory(() => fixture.rpc),
+      }).discoverCovenantLineage({
+        network: "kaspa:testnet-10",
+        covenantId: current.covenantId,
+        templateId: current.channelConfig.templateId,
+        lineage: current.lineage,
+        minConfirmationCount: 30,
+      }),
+    ).rejects.toThrow("without the expected covenant identity");
+  });
+
+  it("rejects conflicting nested and flattened PNN covenant identities", async () => {
+    const current = batchChannel({});
+    const fixture = pnnLineageFixture(
+      current,
+      false,
+      current.covenantId,
+      undefined,
+      "f4".repeat(32),
+    );
+    await expect(
+      new KaspaPnnClient({
+        endpoints: ["wss://pnn-a.example.test/kaspa/testnet-10/wrpc/json"],
+        timeoutMs: 50,
+        rpcFactory: mockPnnRpcFactory(() => fixture.rpc),
+      }).discoverCovenantLineage({
+        network: "kaspa:testnet-10",
+        covenantId: current.covenantId,
+        templateId: current.channelConfig.templateId,
+        lineage: current.lineage,
+        minConfirmationCount: 30,
+      }),
+    ).rejects.toThrow("conflicting identity aliases");
+  });
+
+  it("rejects selected-chain block data bound to a different header hash", async () => {
+    const current = batchChannel({});
+    const fixture = pnnLineageFixture(
+      current,
+      false,
+      current.covenantId,
+      "f5".repeat(32),
+    );
+    await expect(
+      new KaspaPnnClient({
+        endpoints: ["wss://pnn-a.example.test/kaspa/testnet-10/wrpc/json"],
+        timeoutMs: 50,
+        rpcFactory: mockPnnRpcFactory(() => fixture.rpc),
+      }).discoverCovenantLineage({
+        network: "kaspa:testnet-10",
+        covenantId: current.covenantId,
+        templateId: current.channelConfig.templateId,
+        lineage: current.lineage,
+        minConfirmationCount: 30,
+      }),
+    ).rejects.toThrow("header does not match its added-chain hash");
+  });
+
+  it("bounds cumulative PNN selected-chain data across pages", async () => {
+    const current = batchChannel({});
+    const fixture = pnnLineageFixture(current);
+    let page = 0;
+    const rpc: MockPnnRpc = {
+      ...fixture.rpc,
+      async getVirtualChainFromBlockV2() {
+        page += 1;
+        const blockHash = page.toString(16).padStart(64, "0");
+        return {
+          ignoredPadding: "x".repeat(320 * 1024),
+          removedChainBlockHashes: [],
+          addedChainBlockHashes: [blockHash],
+          chainBlockAcceptedTransactions: [
+            {
+              chainBlockHeader: {
+                hash: blockHash,
+                blueScore: "1071",
+                daaScore: "1071",
+              },
+              acceptedTransactions: [],
+            },
+          ],
+        };
+      },
+    };
+
+    await expect(
+      new KaspaPnnClient({
+        endpoints: ["wss://pnn-a.example.test/kaspa/testnet-10/wrpc/json"],
+        timeoutMs: 50,
+        rpcFactory: mockPnnRpcFactory(() => rpc),
+      }).discoverCovenantLineage({
+        network: "kaspa:testnet-10",
+        covenantId: current.covenantId,
+        templateId: current.channelConfig.templateId,
+        lineage: current.lineage,
+        minConfirmationCount: 30,
+      }),
+    ).rejects.toThrow("cumulative byte limit");
+    expect(page).toBeGreaterThan(1);
   });
 
   it("rejects PNN endpoints on the wrong network", async () => {
@@ -832,6 +1357,41 @@ describe("KaspaPnnClient", () => {
         sleep: async () => undefined,
       }).health(),
     ).rejects.toThrow("Kaspa PNN request failed");
+  });
+
+  it("bounds PNN UTXO responses and redacts endpoint paths from errors", async () => {
+    const exact = exactTransactionFixture();
+    const book = new ScriptAddressBook();
+    book.record(exact.payToScriptPublicKey, exact.payTo);
+    const rpcFactory = mockPnnRpcFactory(() => ({
+      async connect() {},
+      async disconnect() {},
+      async getServerInfo() {
+        return { networkId: "testnet-10", isSynced: true };
+      },
+      async submitTransaction() {
+        return { transactionId: exact.txid };
+      },
+      async getUtxosByAddresses() {
+        return { entries: Array.from({ length: 4_097 }, () => ({})) };
+      },
+    }));
+
+    let message = "";
+    try {
+      await new KaspaPnnClient({
+        endpoints: ["wss://pnn.example.test/private/path?token=secret"],
+        timeoutMs: 5,
+        attempts: 1,
+        rpcFactory,
+        sleep: async () => undefined,
+      }).submitTransaction(exact.artifact, book);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("too many UTXO entries");
+    expect(message).not.toContain("private/path");
+    expect(message).not.toContain("token=secret");
   });
 });
 
@@ -1595,7 +2155,7 @@ describe("NativeVoucherVerifier", () => {
         preimage: "22".repeat(32),
         voucher: {
           covenantId: "23".repeat(32),
-          amount: "100",
+          authorizedCumulativeAmount: "100",
           signature,
         },
       }),
@@ -1608,7 +2168,7 @@ describe("NativeVoucherVerifier", () => {
         preimage: "22".repeat(32),
         voucher: {
           covenantId: "23".repeat(32),
-          amount: "100",
+          authorizedCumulativeAmount: "100",
           signature,
         },
       }),
@@ -1641,7 +2201,7 @@ describe("NativeVoucherVerifier", () => {
         preimage: "22".repeat(32),
         voucher: {
           covenantId: "23".repeat(32),
-          amount: "100",
+          authorizedCumulativeAmount: "100",
           signature,
         },
       }),
@@ -1660,22 +2220,24 @@ function batchChannel(
   const activeScriptPublicKey =
     overrides.activeScriptPublicKey ?? `0000${"c2".repeat(34)}`;
   const fundingAmount = overrides.fundingAmount ?? "1000";
-  return {
+  const base = {
     channelId: "c3".repeat(32),
     covenantId,
+    version: "0",
     genesisEvidence: {
       covenantId,
       authorizingInput: { txid: "c4".repeat(32), index: 0 },
-      genesisOutpoint: { txid: "c5".repeat(32), index: 0 },
+      genesisOutpoint: activeOutpoint,
       genesisScriptPublicKey: activeScriptPublicKey,
       genesisAmount: "1000",
       totalOutputCount: 1,
       authorizedOutputCount: 1,
+      acceptance: acceptedEvidence(activeOutpoint.txid),
     },
     channelConfig: {
       network: "kaspa:testnet-10",
       asset: "KAS",
-      templateId: "kaspa-x402-escrow-v2",
+      templateId: "kaspa-x402-escrow-v4",
       clientPublicKey: "c6".repeat(32),
       serverPublicKey: "c7".repeat(32),
       payTo: "kaspatest:payout",
@@ -1691,8 +2253,34 @@ function batchChannel(
     claimedCumulativeAmount: "0",
     signedMaxClaimable: "0",
     status: "active",
-    ...overrides,
   };
+  const merged = { ...base, ...overrides } as Omit<
+    ServerChannelRecord,
+    "lineage"
+  > & { lineage?: ServerChannelRecord["lineage"] };
+  const lineage = overrides.lineage ?? createCovenantLineageState({
+    format: "kaspa-x402-covenant-launch-v1",
+    network: merged.channelConfig.network,
+    compiler: structuredClone(ESCROW_V4_LAUNCH_IDENTITY.compiler),
+    source: structuredClone(ESCROW_V4_LAUNCH_IDENTITY.source),
+    bytecode: structuredClone(ESCROW_V4_LAUNCH_IDENTITY.bytecode),
+    constructorSlots: structuredClone(ESCROW_V4_LAUNCH_IDENTITY.constructorSlots),
+    abi: structuredClone(ESCROW_V4_LAUNCH_IDENTITY.abi),
+    selectors: structuredClone(ESCROW_V4_LAUNCH_IDENTITY.selectors),
+    identitySha256: ESCROW_V4_LAUNCH_IDENTITY.identitySha256,
+    genesis: {
+      derivation: "kip20-covenant-id-v1",
+      covenantId: merged.covenantId,
+      authorizingInput: merged.genesisEvidence.authorizingInput,
+      transactionId: merged.activeOutpoint.txid,
+      outpoint: merged.activeOutpoint,
+      scriptPublicKey: merged.activeScriptPublicKey,
+      value: merged.fundingAmount,
+      claimedCumulativeAmount: merged.claimedCumulativeAmount,
+      acceptance: acceptedEvidence(merged.activeOutpoint.txid),
+    },
+  });
+  return { ...merged, lineage };
 }
 
 type MockPnnRpc = {
@@ -1708,6 +2296,16 @@ type MockPnnRpc = {
     allowOrphan: boolean;
   }): Promise<{ transactionId?: unknown }>;
   getUtxosByAddresses(addresses: string[]): Promise<{ entries?: unknown[] }>;
+  getVirtualChainFromBlockV2?(request: {
+    startHash: string;
+    dataVerbosityLevel: "Low" | "High";
+    minConfirmationCount: number;
+  }): Promise<unknown>;
+  getBlockDagInfo?(): Promise<unknown>;
+  getBlock?(request: {
+    hash: string;
+    includeTransactions: boolean;
+  }): Promise<unknown>;
 };
 
 function mockPnnRpcFactory(factory: (endpoint: string) => MockPnnRpc) {
@@ -1722,6 +2320,120 @@ function pnnPaymentUtxo(exact: ReturnType<typeof exactTransactionFixture>) {
       scriptPublicKey: exact.payToScriptPublicKey,
     },
   };
+}
+
+function pnnLineageFixture(
+  current: ServerChannelRecord,
+  branching = false,
+  inputCovenantId = current.covenantId,
+  headerHash?: string,
+  flattenedInputCovenantId?: string,
+) {
+  const proofCheckpoint = {
+    blockHash: "f0".repeat(32),
+    blueScore: "1100",
+    daaScore: "1100",
+  };
+  const checkpoint = {
+    blockHash: "f5".repeat(32),
+    blueScore: "1105",
+    daaScore: "1105",
+  };
+  const acceptingBlockHash = "f1".repeat(32);
+  const transactionId = "f2".repeat(32);
+  const successorScript = "0000" + "f3".repeat(34);
+  let checkpointCalls = 0;
+  let selectedCalls = 0;
+  const successor = {
+    value: "900",
+    scriptPublicKey: successorScript,
+    covenant: {
+      covenantId: current.covenantId,
+      authorizingInput: 0,
+    },
+  };
+  const rpc: MockPnnRpc = {
+    async connect() {},
+    async disconnect() {},
+    async getServerInfo() {
+      return { networkId: "testnet-10", isSynced: true };
+    },
+    async submitTransaction() {
+      throw new Error("unused");
+    },
+    async getUtxosByAddresses() {
+      throw new Error("unused");
+    },
+    async getBlockDagInfo() {
+      checkpointCalls += 1;
+      return {
+        sink: checkpointCalls === 1
+          ? proofCheckpoint.blockHash
+          : checkpoint.blockHash,
+      };
+    },
+    async getBlock({ hash, includeTransactions }) {
+      expect([proofCheckpoint.blockHash, checkpoint.blockHash]).toContain(hash);
+      expect(includeTransactions).toBe(false);
+      const requestedCheckpoint = hash === proofCheckpoint.blockHash
+        ? proofCheckpoint
+        : checkpoint;
+      return {
+        block: {
+          header: {
+            blueScore: requestedCheckpoint.blueScore,
+            daaScore: requestedCheckpoint.daaScore,
+          },
+          verboseData: {
+            hash: requestedCheckpoint.blockHash,
+            isChainBlock: true,
+          },
+        },
+      };
+    },
+    async getVirtualChainFromBlockV2(request) {
+      expect(request.dataVerbosityLevel).toBe("High");
+      expect(request.minConfirmationCount).toBe(30);
+      selectedCalls += 1;
+      if (selectedCalls > 1) {
+        expect(request.startHash).toBe(acceptingBlockHash);
+        return {
+          removedChainBlockHashes: [],
+          addedChainBlockHashes: [],
+          chainBlockAcceptedTransactions: [],
+        };
+      }
+      expect(request.startHash).toBe(current.lineage.checkpoint.blockHash);
+      return {
+        removedChainBlockHashes: [],
+        addedChainBlockHashes: [acceptingBlockHash],
+        chainBlockAcceptedTransactions: [{
+          chainBlockHeader: {
+            ...(headerHash ? { hash: headerHash } : {}),
+            blueScore: "1071",
+            daaScore: "1071",
+          },
+          acceptedTransactions: [{
+            transactionId,
+            inputs: [{
+              previousOutpoint: {
+                transactionId: current.activeOutpoint.txid,
+                index: current.activeOutpoint.index,
+              },
+              verboseData: {
+                utxoEntry: { covenantId: inputCovenantId },
+              },
+              ...(flattenedInputCovenantId
+                ? { covenantId: flattenedInputCovenantId }
+                : {}),
+            }],
+            outputs: branching ? [successor, { ...successor }] : [successor],
+          }],
+        }],
+      };
+    },
+  };
+  return { rpc, checkpoint, acceptingBlockHash, transactionId };
 }
 
 function exactTransactionFixture() {
@@ -1799,6 +2511,8 @@ function exactTransactionFixture() {
       transaction_id: txid,
       version: 1,
       is_accepted: true,
+      accepting_block_hash: "ed".repeat(32),
+      accepting_block_blue_score: "971",
       inputs: [
         {
           previous_outpoint_hash: headTxid,
@@ -1851,6 +2565,39 @@ function exactHeadFixture(
     status: "available",
     createdAt: "2026-07-14T00:00:00.000Z",
     updatedAt: "2026-07-14T00:00:00.000Z",
+  };
+}
+
+function exactSettlementAttemptFixture(
+  exact: ReturnType<typeof exactTransactionFixture>,
+): ExactSettlementAttemptRecord {
+  return {
+    transactionId: exact.txid,
+    profile: "additive",
+    amount: "20000000",
+    paymentOutputIndex: 0,
+    requestFingerprint: "44".repeat(32),
+    paymentRequirementsHash: "55".repeat(32),
+    paymentPayloadHash: "66".repeat(32),
+    requestAuthorizationId: "77".repeat(32),
+    payToScriptPublicKey: exact.headScriptPublicKey,
+    transaction: exact.artifact,
+    requiredFinality: "accepted",
+    payerId: "88".repeat(32),
+    status: "broadcast",
+    createdAt: "2026-09-09T00:00:00.000Z",
+    updatedAt: "2026-09-09T00:00:00.000Z",
+    head: {
+      headId: "90".repeat(32),
+      expectedVersion: "0",
+      expectedOutpoint: { txid: exact.headTxid, index: 0 },
+      expectedAmount: "100000000",
+      successor: {
+        outpoint: { txid: exact.txid, index: 0 },
+        amount: "120000000",
+        scriptPublicKey: exact.headScriptPublicKey,
+      },
+    },
   };
 }
 

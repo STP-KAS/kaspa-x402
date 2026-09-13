@@ -1,6 +1,6 @@
 # Standards Site Architecture
 
-Status: alpha deployment plan for `kaspa-x402.org`. This document is internal
+Status: release-candidate deployment plan for `kaspa-x402.org`. This document is internal
 and is not published on the site.
 
 `kaspa-x402.org` is the canonical standards reference for the Kaspa x402
@@ -44,7 +44,7 @@ and `packages.json` remains the machine-readable route. Active indexes show
 one-line purpose annotations; immutable release metadata and conformance
 indexes retain content hashes. Prose on the homepage makes only claims that
 are specified in this repository or backed by the published testnet evidence,
-and always states the alpha/testnet-only status.
+and always states the prerelease/testnet-only status.
 
 ## Repository Layout
 
@@ -68,19 +68,19 @@ The apex site publishes:
 - conformance vectors under `/vectors/`;
 - selected public docs under `/docs/`;
 - a static testnet browser client under `/demo/`;
-- immutable alpha snapshots under `/v0.1.0-alpha.N/`, indexed at `/releases/`;
+- immutable SemVer snapshots under `/v<version>/`, indexed at `/releases/`;
 - package metadata and source links on the homepage and at `/packages.json`.
 
 Release snapshots lock schemas, specs, selected docs, vectors, versioned
 package metadata, and release metadata. They do not lock the interactive
 browser client, shared CSS/JS assets, or vendored browser SDK files; those are
-active-alpha site routes and `site:check` enforces that they are not copied
+mutable prerelease site routes and `site:check` enforces that they are not copied
 under versioned release paths.
 
 Ignored operational or planning files must not be published. This includes
 private live-run artifacts, local adapter files, review drafts, findings
 drafts, announcement drafts, and internal planning files.
-`docs/alpha-publish.md` and this document are internal and excluded from
+`docs/release-publish.md` and this document are internal and excluded from
 publication.
 
 ## Deployment Model

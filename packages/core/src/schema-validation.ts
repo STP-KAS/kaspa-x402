@@ -13,6 +13,11 @@ import {
   type KaspaX402ErrorCode,
   type ValidationResult,
 } from "./errors.js";
+import { PAYMENT_IDENTIFIER_INFO_SCHEMA } from "./extensions.js";
+import {
+  KASPA_X402_RESOURCE_BUDGET,
+  assertJsonResourceBudget,
+} from "./resource-budget.js";
 import {
   validateChannelState as validateChannelStateSchema,
   validateKaspaBatchExtra as validateKaspaBatchExtraSchema,
@@ -59,6 +64,10 @@ export const SCHEMA_IDS = {
     "https://kaspa-x402.org/schemas/settlement-response.schema.json",
 } as const;
 
+const TRUSTED_PAYMENT_IDENTIFIER_SCHEMA = stableStringify(
+  PAYMENT_IDENTIFIER_INFO_SCHEMA,
+);
+
 type SchemaId = (typeof SCHEMA_IDS)[keyof typeof SCHEMA_IDS];
 
 const PAYMENT_REQUIREMENTS_ENTRY_SCHEMA_ID =
@@ -103,6 +112,8 @@ export function validateKaspaPaymentRequirement(
 export function validatePaymentRequiredEnvelope(
   value: unknown,
 ): ValidationResult<PaymentRequiredEnvelope> {
+  const budget = validateResourceBudget(value, "PaymentRequired envelope");
+  if (!budget.ok) return budget;
   const record = asRecord(value);
   if (!record)
     return fail(
@@ -245,6 +256,28 @@ export function validatePaymentIdentifierInfo(
   schema?: JsonRecord,
 ): ValidationResult<PaymentIdentifierInfo> {
   if (schema) {
+    const aggregateBudget = validateResourceBudget(
+      { schema, value },
+      "payment-identifier validation",
+      "invalid_kaspa_payment_identifier",
+    );
+    if (!aggregateBudget.ok) return aggregateBudget;
+  }
+  const valueBudget = validateResourceBudget(
+    value,
+    "payment-identifier info",
+    "invalid_kaspa_payment_identifier",
+  );
+  if (!valueBudget.ok) return valueBudget;
+  if (schema) {
+    const schemaBudget = validateResourceBudget(
+      schema,
+      "payment-identifier schema",
+      "invalid_kaspa_payment_identifier",
+    );
+    if (!schemaBudget.ok) return schemaBudget;
+  }
+  if (schema && stableStringify(schema) !== TRUSTED_PAYMENT_IDENTIFIER_SCHEMA) {
     const advertised = validateWithInlineSchema<PaymentIdentifierInfo>(
       schema,
       value,
@@ -295,6 +328,8 @@ export function validatePaymentRetry(input: {
   paymentRequired: PaymentRequired;
   paymentPayload: PaymentPayload;
 }> {
+  const aggregateBudget = validateResourceBudget(input, "payment retry");
+  if (!aggregateBudget.ok) return aggregateBudget;
   const required = validatePaymentRequired(input.paymentRequired);
   if (!required.ok) return required;
 
@@ -404,6 +439,8 @@ function validateWithSchema<T>(
   value: unknown,
   classify: (value: unknown) => KaspaX402ErrorCode,
 ): ValidationResult<T> {
+  const budget = validateResourceBudget(value, "schema input");
+  if (!budget.ok) return budget;
   const validate = getSchema(schemaId);
   if (validate(value)) {
     return ok(value as T);
@@ -417,6 +454,19 @@ function validateWithInlineSchema<T>(
   value: unknown,
   classify: (value: unknown) => KaspaX402ErrorCode,
 ): ValidationResult<T> {
+  const errorCode = classify(value);
+  const schemaBudget = validateResourceBudget(
+    schema,
+    "inline schema",
+    errorCode,
+  );
+  if (!schemaBudget.ok) return schemaBudget;
+  const valueBudget = validateResourceBudget(
+    value,
+    "inline schema value",
+    errorCode,
+  );
+  if (!valueBudget.ok) return valueBudget;
   const result = validateJsonSchemaSubset(schema, value);
   if (result.ok) {
     return ok(value as T);
@@ -446,7 +496,12 @@ function validateJsonSchemaSubset(
   schema: unknown,
   value: unknown,
   path = "",
+  meter: { work: number } = { work: 0 },
 ): SubsetValidationResult {
+  meter.work += 1;
+  if (meter.work > KASPA_X402_RESOURCE_BUDGET.maxValidationWork) {
+    return subsetFailure(path, "inline schema exceeds validation work limit", false);
+  }
   const schemaRecord = asRecord(schema);
   if (!schemaRecord)
     return subsetFailure(path, "schema must be an object", false);
@@ -482,11 +537,23 @@ function validateJsonSchemaSubset(
   if (enumValues !== undefined) {
     if (!Array.isArray(enumValues))
       return subsetFailure(path, "enum must be an array", false);
-    if (
-      !enumValues.some(
-        (candidate) => stableStringify(candidate) === stableStringify(value),
-      )
-    )
+    const valueIdentity = stableStringify(value);
+    let matched = false;
+    for (const candidate of enumValues) {
+      meter.work += 1;
+      if (meter.work > KASPA_X402_RESOURCE_BUDGET.maxValidationWork) {
+        return subsetFailure(
+          path,
+          "inline schema exceeds validation work limit",
+          false,
+        );
+      }
+      if (stableStringify(candidate) === valueIdentity) {
+        matched = true;
+        break;
+      }
+    }
+    if (!matched)
       return subsetFailure(path, "must equal one enum value", true);
   }
 
@@ -510,6 +577,14 @@ function validateJsonSchemaSubset(
         );
       }
       for (const field of required) {
+        meter.work += 1;
+        if (meter.work > KASPA_X402_RESOURCE_BUDGET.maxValidationWork) {
+          return subsetFailure(
+            path,
+            "inline schema exceeds validation work limit",
+            false,
+          );
+        }
         if (!Object.hasOwn(valueRecord, field))
           return subsetFailure(
             joinPath(path, field),
@@ -529,6 +604,7 @@ function validateJsonSchemaSubset(
           propertySchema,
           valueRecord[key],
           joinPath(path, key),
+          meter,
         );
         if (!propertyResult.ok) return propertyResult;
       }
@@ -578,22 +654,6 @@ function validateJsonSchemaSubset(
         Number.isInteger(schemaRecord.maxLength),
       );
     }
-    if (schemaRecord.pattern !== undefined) {
-      if (typeof schemaRecord.pattern !== "string")
-        return subsetFailure(path, "pattern must be a string", false);
-      let pattern: RegExp;
-      try {
-        pattern = new RegExp(schemaRecord.pattern);
-      } catch {
-        return subsetFailure(
-          path,
-          "pattern must be a valid regular expression",
-          false,
-        );
-      }
-      if (!pattern.test(value))
-        return subsetFailure(path, "string does not match pattern", true);
-    }
     return { ok: true, schemaSupported: true };
   }
 
@@ -618,6 +678,22 @@ function validateJsonSchemaSubset(
   return { ok: true, schemaSupported: true };
 }
 
+function validateResourceBudget(
+  value: unknown,
+  label: string,
+  errorCode: KaspaX402ErrorCode = "invalid_kaspa_x402_payload",
+): ValidationResult<void> {
+  try {
+    assertJsonResourceBudget(value, { label, errorCode });
+    return ok(undefined);
+  } catch (error) {
+    if (error instanceof KaspaX402Error) {
+      return fail(errorCode, error.message, error.details);
+    }
+    return fail(errorCode, `${label} failed resource-budget validation`, error);
+  }
+}
+
 const SUPPORTED_INLINE_SCHEMA_KEYWORDS = new Set([
   "$id",
   "$schema",
@@ -629,7 +705,6 @@ const SUPPORTED_INLINE_SCHEMA_KEYWORDS = new Set([
   "examples",
   "maxLength",
   "minLength",
-  "pattern",
   "properties",
   "required",
   "title",
@@ -651,7 +726,7 @@ function inferSchemaType(
     "properties",
     "required",
   ].filter((key) => Object.hasOwn(schema, key));
-  const stringKeywords = ["maxLength", "minLength", "pattern"].filter((key) =>
+  const stringKeywords = ["maxLength", "minLength"].filter((key) =>
     Object.hasOwn(schema, key),
   );
   if (objectKeywords.length > 0 && stringKeywords.length > 0) {
@@ -758,7 +833,7 @@ function classifyRequirementEntry(
   }
   if (
     entry.scheme === "batch-settlement" &&
-    !BATCH_AMOUNT_DECIMAL_PATTERN.test(entry.amount)
+    (!BATCH_AMOUNT_DECIMAL_PATTERN.test(entry.amount) || entry.amount === "0")
   ) {
     return "invalid_kaspa_x402_amount";
   }
@@ -839,8 +914,10 @@ function classifyKaspaPaymentPayload(value: unknown): KaspaX402ErrorCode {
   )
     return "invalid_kaspa_signature";
   if (
-    voucher?.amount !== undefined &&
-    !BATCH_AMOUNT_DECIMAL_PATTERN.test(String(voucher.amount))
+    voucher?.authorizedCumulativeAmount !== undefined &&
+    !BATCH_AMOUNT_DECIMAL_PATTERN.test(
+      String(voucher.authorizedCumulativeAmount),
+    )
   )
     return "invalid_kaspa_x402_amount";
   if (
@@ -870,7 +947,7 @@ function classifySettlementResponse(value: unknown): KaspaX402ErrorCode {
 
 function isExpectedBindingForScheme(scheme: string, binding: unknown): boolean {
   if (scheme === "exact") return binding === "kaspa-exact-v2";
-  return scheme === "batch-settlement" && binding === "kaspa-escrow-v2";
+  return scheme === "batch-settlement" && binding === "kaspa-escrow-v3";
 }
 
 function isNonzeroHash32(value: unknown): boolean {

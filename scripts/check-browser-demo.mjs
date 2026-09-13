@@ -142,14 +142,14 @@ function assertBrowserResult(value) {
   assert(value.signatureBytes > 0, "missing PAYMENT-SIGNATURE header");
   assert(value.batchRequiredBytes > 0, "missing batch PAYMENT-REQUIRED header");
   assert(value.batchSignatureBytes > 0, "missing batch PAYMENT-SIGNATURE header");
-  assert(value.batchBinding === "kaspa-escrow-v2", `unexpected batch binding: ${value.batchBinding}`);
-  assert(value.batchTemplateId === "kaspa-x402-escrow-v2", `unexpected batch template: ${value.batchTemplateId}`);
+  assert(value.batchBinding === "kaspa-escrow-v3", `unexpected batch binding: ${value.batchBinding}`);
+  assert(value.batchTemplateId === "kaspa-x402-escrow-v4", `unexpected batch template: ${value.batchTemplateId}`);
   assert(value.batchCovenantId === "7".repeat(64), "batch voucher did not bind the stable covenant id");
-  assert(value.batchVoucherAmount === "30000000", `unexpected batch voucher T: ${value.batchVoucherAmount}`);
+  assert(value.batchVoucherAmount === "22500000", `unexpected batch voucher T: ${value.batchVoucherAmount}`);
   assert(value.batchCurrentTxid === "8".repeat(64), "batch payload did not carry the current outpoint");
   assert(value.batchBefore.A === "2500000", `unexpected A before request: ${value.batchBefore.A}`);
   assert(value.batchBefore.S === "1700000", `unexpected S before request: ${value.batchBefore.S}`);
-  assert(value.batchBefore.T === "30000000", `unexpected T before request: ${value.batchBefore.T}`);
+  assert(value.batchBefore.T === "22500000", `unexpected T before request: ${value.batchBefore.T}`);
   assert(value.batchBefore.V === "88300000", `unexpected V before request: ${value.batchBefore.V}`);
   assert(value.batchBefore.R === "10000000", `unexpected R before request: ${value.batchBefore.R}`);
   assert(value.batchAfterWork.A === "22500000", `unexpected A after work: ${value.batchAfterWork.A}`);
@@ -157,7 +157,7 @@ function assertBrowserResult(value) {
   assert(value.batchSuccessor.covenantId === value.batchCovenantId, "partial claim changed covenant id");
   assert(value.batchSuccessor.A === "22500000", "partial claim reset A");
   assert(value.batchSuccessor.S === "2500000", "partial claim did not advance S");
-  assert(value.batchSuccessor.T === "30000000", "partial claim reset T");
+  assert(value.batchSuccessor.T === "22500000", "partial claim reset T");
   assert(value.batchSuccessor.V === "87500000", "partial claim did not reduce V by D");
   assert(value.batchSuccessor.voucherSignature === "unchanged", "partial claim did not preserve voucher proof");
   assert(value.exactPaymentFieldsHiddenForBatch === true, "batch selection did not hide exact transaction controls");
@@ -303,7 +303,7 @@ function demoExerciseExpression() {
     batchBinding: batch.accepts[0].extra.binding,
     batchTemplateId: batch.accepts[0].extra.templateId,
     batchCovenantId: batchPayment.payload.voucher.covenantId,
-    batchVoucherAmount: batchPayment.payload.voucher.amount,
+    batchVoucherAmount: batchPayment.payload.voucher.authorizedCumulativeAmount,
     batchCurrentTxid: batchPayment.payload.fundingOutpoint.txid,
     batchBefore: lanePreview.beforeRequest,
     batchAfterWork: lanePreview.afterSuccessfulWork,

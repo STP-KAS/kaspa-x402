@@ -33,6 +33,13 @@ import {
   assertHostedOfferPinned,
   assertHostedSettlementHeadPinned,
 } from "./hosted-offer-pins.mjs";
+import { normalizedBaseUrl } from "./demo-exact-heads.mjs";
+import {
+  stringifySanitizedProofOutput,
+  writePrivateProofJson,
+} from "./proof-output-security.mjs";
+import { readBoundedResponseText } from "./read-bounded-response.mjs";
+import { transactionInputOutpoint } from "./transaction-input-outpoint.mjs";
 
 const DEFAULT_GATEWAY_URL = "https://demo.kaspa-x402.org";
 const DEFAULT_CONFIRMATION_TIMEOUT_MS = 120_000;
@@ -42,12 +49,14 @@ const DEFAULT_ADDITIVE_THRESHOLD = 10_000_000n;
 const EXACT_KIP10_COMPUTE_BUDGET = 10;
 const NATIVE_SUBNETWORK_ID = "00".repeat(20);
 const CONFIRMATION = "I_UNDERSTAND_THIS_USES_TESTNET_FUNDS";
+const GATEWAY_FETCH_TIMEOUT_MS = 15_000;
+const MAX_GATEWAY_RESPONSE_BYTES = 64 * 1024;
 
 const options = readOptions(process.argv.slice(2));
 const fileEnv = readOptionalEnv(options.configFile);
 const env = { ...nonEmptyValues(fileEnv), ...process.env };
 const config = {
-  gatewayBase: normalizedBaseUrl(
+  gatewayBase: normalizedProofGatewayBaseUrl(
     env.KASPA_X402_DEMO_GATEWAY_URL ||
       env.KASPA_X402_GATEWAY_BASE_URL ||
       DEFAULT_GATEWAY_URL,
@@ -73,6 +82,14 @@ const config = {
   confirmation: env.KASPA_X402_LIVE_CONFIRM || "",
 };
 
+function normalizedProofGatewayBaseUrl(value) {
+  try {
+    return normalizedBaseUrl(value);
+  } catch {
+    throw new Error("configured gateway URL is invalid or unsafe");
+  }
+}
+
 const report = {
   generatedAt: new Date().toISOString(),
   mode: "hosted-exact-testnet",
@@ -92,11 +109,10 @@ try {
     result,
   });
   console.log(
-    JSON.stringify(
+    stringifySanitizedProofOutput(
       { ...report, status: "complete", findings: [], result },
-      null,
-      2,
-    ),
+      { secrets: proofOutputSecrets() },
+    ).trimEnd(),
   );
 } catch (error) {
   const failed = {
@@ -110,7 +126,11 @@ try {
     ],
   };
   writeJson(config.reportFile, failed);
-  console.error(JSON.stringify(failed, null, 2));
+  console.error(
+    stringifySanitizedProofOutput(failed, {
+      secrets: proofOutputSecrets(),
+    }).trimEnd(),
+  );
   process.exitCode = 1;
 }
 
@@ -196,6 +216,7 @@ async function runHostedExactProof(input) {
       addressCodec,
       refundAddress: fundingAddress,
       supportedNetworks: [input.network],
+      confirmationThreshold: 30,
       fetch: gatewayFetch,
       maxPaymentRetries: 0,
       fundingPolicy: {
@@ -423,6 +444,16 @@ async function createHostedHead(input) {
 }
 
 function makeFundingProvider(input) {
+  const exactAttempts = new Map();
+  let exactQueue = Promise.resolve();
+  const runExact = (operation) => {
+    const result = exactQueue.then(operation, operation);
+    exactQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
   return {
     networkId: input.network,
     sourceKind: "hot-wallet",
@@ -441,18 +472,53 @@ function makeFundingProvider(input) {
         ),
       };
     },
-    async authorizeExactPayment() {},
     async payExactTransaction(request) {
-      return buildExactTransaction({
-        rpc: input.rpc,
-        sdk: input.sdk,
-        networkId: input.networkId,
-        fundingPrivateKey: input.fundingPrivateKey,
-        fundingPrivateKeyHex: input.fundingPrivateKeyHex,
-        fundingAddress: input.fundingAddress,
-        schnorr: input.schnorr,
-        request,
-        spentOutpoints: input.spentOutpoints,
+      return runExact(async () => {
+        const key = request.attemptId.toLowerCase();
+        const existing = exactAttempts.get(key);
+        if (existing) {
+          if (existing.intentHash !== request.intentHash.toLowerCase())
+            throw new Error("exact payment attempt intent changed");
+          return structuredClone(existing.result);
+        }
+        const result = await buildExactTransaction({
+          rpc: input.rpc,
+          sdk: input.sdk,
+          networkId: input.networkId,
+          fundingPrivateKey: input.fundingPrivateKey,
+          fundingPrivateKeyHex: input.fundingPrivateKeyHex,
+          fundingAddress: input.fundingAddress,
+          schnorr: input.schnorr,
+          request,
+          spentOutpoints: input.spentOutpoints,
+        });
+        const headKey = request.head
+          ? outpointKey(request.head.expectedHeadOutpoint)
+          : undefined;
+        exactAttempts.set(key, {
+          intentHash: request.intentHash.toLowerCase(),
+          result: structuredClone(result),
+          reservedOutpoints: result.inputOutpoints.filter(
+            (outpoint) => outpointKey(outpoint) !== headKey,
+          ),
+        });
+        return result;
+      });
+    },
+    async finalizeExactPaymentAttempt(request) {
+      return runExact(async () => {
+        const existing = exactAttempts.get(request.attemptId.toLowerCase());
+        if (!existing) return;
+        if (
+          existing.result.transactionId.toLowerCase() !==
+          request.transactionId.toLowerCase()
+        ) {
+          throw new Error("exact transaction id does not match provider attempt");
+        }
+        if (request.outcome === "absent") {
+          for (const outpoint of existing.reservedOutpoints)
+            input.spentOutpoints.delete(outpointKey(outpoint));
+        }
       });
     },
     async getUtxos(addresses) {
@@ -671,6 +737,7 @@ function exactPaymentArtifact(
     transactionEncoding: KIP10_EXACT_TRANSACTION_ENCODING,
     paymentOutputIndex: 0,
     transactionId: transaction.id,
+    inputOutpoints: exactTransactionInputOutpoints(transaction),
     authorization: {
       version: "kaspa-x402-exact-request-authorization-v1",
       inputIndex: authorizationInputIndex,
@@ -686,6 +753,15 @@ function exactPaymentArtifact(
     payerAddress,
     fundingSource: "hot-wallet",
   };
+}
+
+function exactTransactionInputOutpoints(transaction) {
+  return transaction.serializeToObject().inputs.map((input) => {
+    const outpoint = transactionInputOutpoint(input);
+    if (!outpoint)
+      throw new Error("signed exact transaction input is missing its outpoint");
+    return outpoint;
+  });
 }
 
 async function fundKip10Head(input) {
@@ -750,24 +826,24 @@ async function fundKip10Head(input) {
 }
 
 async function fetchPaymentRequired(url) {
-  const response = await fetch(url, { redirect: "error" });
+  const response = await gatewayFetch(url);
   if (response.status !== 402)
     throw new Error(
-      `${url} expected 402, got ${response.status}: ${await response.text()}`,
+      `${safeUrlLabel(url)} expected 402, got ${response.status}: ${await readGatewayResponseText(response)}`,
     );
   const header = response.headers.get(PAYMENT_REQUIRED_HEADER);
-  if (!header) throw new Error(`${url} missing PAYMENT-REQUIRED`);
+  if (!header) throw new Error(`${safeUrlLabel(url)} missing PAYMENT-REQUIRED`);
   return header;
 }
 
 async function submitPayment(url, paymentPayload, { expectStatus, label }) {
   const header = encodePaymentSignatureHeader(paymentPayload);
-  const response = await fetch(url, {
+  const response = await gatewayFetch(url, {
     method: "GET",
     redirect: "error",
     headers: { [PAYMENT_SIGNATURE_HEADER]: header },
   });
-  const text = await response.text();
+  const text = await readGatewayResponseText(response);
   const body = parseJson(text);
   if (response.status !== expectStatus) {
     throw new Error(
@@ -783,11 +859,12 @@ async function gatewayFetch(input, init = {}) {
     body: init.body,
     headers: init.headers,
     redirect: "error",
+    signal: AbortSignal.timeout(GATEWAY_FETCH_TIMEOUT_MS),
   });
 }
 
 async function gatewayAdminRequest(baseUrl, pathName, adminToken, init = {}) {
-  const response = await fetch(new URL(pathName, baseUrl), {
+  const response = await gatewayFetch(new URL(pathName, baseUrl), {
     ...init,
     redirect: "error",
     headers: {
@@ -797,7 +874,7 @@ async function gatewayAdminRequest(baseUrl, pathName, adminToken, init = {}) {
       ...init.headers,
     },
   });
-  const text = await response.text();
+  const text = await readGatewayResponseText(response);
   const body = parseJson(text);
   if (!response.ok || body?.ok === false)
     throw new Error(
@@ -1084,15 +1161,29 @@ function kaspaNetworkId(network) {
   throw new Error(`unsupported network ${network}`);
 }
 
-function normalizedBaseUrl(value) {
-  const url = new URL(value);
-  url.hash = "";
-  url.search = "";
-  return `${url.toString().replace(/\/$/, "")}/`;
+function redactRpc(value) {
+  try {
+    const url = new URL(value);
+    return `${url.protocol}//<redacted>${url.port ? `:${url.port}` : ""}`;
+  } catch {
+    return "<redacted>";
+  }
 }
 
-function redactRpc(value) {
-  return value.replace(/\/\/([^:/]+)(?::\d+)?/, "//<redacted>");
+function safeUrlLabel(value) {
+  try {
+    const url = new URL(value);
+    return `${url.protocol}//${url.host}${url.pathname}`;
+  } catch {
+    return "gateway URL";
+  }
+}
+
+function readGatewayResponseText(response) {
+  return readBoundedResponseText(response, {
+    maxBytes: MAX_GATEWAY_RESPONSE_BYTES,
+    tooLargeMessage: "gateway response exceeded the size limit",
+  });
 }
 
 function markOutpointSpent(spentOutpoints, outpoint) {
@@ -1121,13 +1212,13 @@ function sleep(ms) {
 }
 
 function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(path.resolve(file)), {
-    recursive: true,
-    mode: 0o700,
+  writePrivateProofJson(file, value, {
+    secrets: proofOutputSecrets(),
   });
-  fs.writeFileSync(path.resolve(file), `${JSON.stringify(value, null, 2)}\n`, {
-    mode: 0o600,
-  });
+}
+
+function proofOutputSecrets() {
+  return [config.rpcUrl, config.fundingWallet, config.adminToken];
 }
 
 function readOptions(argv) {

@@ -1,15 +1,15 @@
 # Demo Implementer Guide
 
-Status: Alpha.10, Testnet-10 only. The hosted gateway is an integration target,
-not a production or mainnet service.
+Status: v1 RC1 release candidate, Testnet-10 only. The hosted gateway is an
+integration target, not a production or mainnet service.
 
-This guide describes the published Alpha.10 source and public gateway. The
-gateway completed its fresh-state cutover and is an Alpha.10 interoperability
-endpoint.
+This guide describes the v1 RC1 candidate source and planned public-gateway
+cutover. The public registry and gateway remain Alpha.10 until the v1 RC1
+release and funded canaries are completed.
 
-Alpha.10 uses `kaspa-escrow-v2` / `kaspa-x402-escrow-v2` for batch settlement.
+v1 RC1 uses `kaspa-escrow-v3` / `kaspa-x402-escrow-v4` for batch settlement.
 The exact profiles are unchanged. Older alpha snapshots are historical artifacts
-only; clients must not send their batch payloads to the Alpha.10 runtime.
+only; clients must not send their batch payloads to the v1 RC1 runtime.
 
 ## Start With The Artifacts
 
@@ -27,16 +27,18 @@ Useful entry points:
 - gateway docs: `https://kaspa-x402.org/docs/testnet-gateway/`;
 - gateway base URL: `https://demo.kaspa-x402.org`.
 
-Install the exact prerelease explicitly:
+Before publication, use a clean checkout or locally packed v1 RC1 tarballs.
+After v1 RC1 is published, install the exact prerelease explicitly:
 
 ```sh
-npm install @kaspa-x402/core@0.1.0-alpha.10 @kaspa-x402/client@0.1.0-alpha.10
+npm install @kaspa-x402/core@1.0.0-rc.1 @kaspa-x402/client@1.0.0-rc.1
 ```
 
-The registry `latest` and `alpha` tags both resolve to the same Alpha.10 package
-set. Alpha.10 remains prerelease software: `latest` identifies the currently
-recommended alpha and does not imply a stable API, frozen wire format, or
-mainnet readiness. The hosted gateway package is not published.
+The registry `latest` and `alpha` tags currently resolve to Alpha.10. After
+publication, use `@rc` or exact version `1.0.0-rc.1`; do not use `latest` as an
+RC input. v1 RC1 remains prerelease software and does not imply a
+stable API, frozen wire format, or mainnet readiness. The hosted gateway package
+is not published.
 
 ## Validate Schemas And Vectors
 
@@ -62,13 +64,14 @@ transaction-specific mass and reserve analysis.
 curl -fsS https://demo.kaspa-x402.org/supported
 ```
 
-Do not submit payment until the response advertises the expected Alpha.10
-release and capability:
+Do not submit a v1 RC1 payment until the response advertises the expected
+v1 RC1 release and capability. The public gateway is expected to remain on
+Alpha.10 until the clean cutover completes:
 
 - `network: "kaspa:testnet-10"`;
 - `asset: "KAS"`;
-- `scheme: "batch-settlement"`, binding `kaspa-escrow-v2`, and template
-  `kaspa-x402-escrow-v2`;
+- `scheme: "batch-settlement"`, binding `kaspa-escrow-v3`, and template
+  `kaspa-x402-escrow-v4`;
 - `scheme: "exact"` under the configured exact profile; and
 - accepted finality `accepted`.
 
@@ -145,8 +148,8 @@ curl -i https://demo.kaspa-x402.org/batch
 ```
 
 The `402` response must contain `batch-settlement` requirements with
-`extra.binding: "kaspa-escrow-v2"` and
-`extra.templateId: "kaspa-x402-escrow-v2"`.
+`extra.binding: "kaspa-escrow-v3"` and
+`extra.templateId: "kaspa-x402-escrow-v4"`.
 
 Open a lane by building and funding the advertised singleton KIP-20 genesis.
 Before signing the first voucher, derive and retain its stable `covenantId` and
@@ -162,9 +165,17 @@ does not bind the rotating outpoint. Both client and server still persist the
 current outpoint because standard RPC cannot find the current UTXO from a
 covenant id.
 
-For one lane define A as lifetime actual charges, S as lifetime gross on-chain
-settlement including claim fees, V as current covenant value, and R as the
-server-advertised minimum successor reserve `claimReserveSompi`. Voucher
+The reference Testnet-10 policy requires 30 confirmations proven by an
+authoritative selected-chain traversal. Accepting-block and durable-checkpoint
+blue scores bind the evidence but do not determine selected-chain depth.
+Clients resume lineage from that checkpoint, process removed blocks before
+additions, and accept only one verified successor. Missing or pruned continuity
+keeps the lane unavailable; REST UTXO presence or peer channel metadata is not
+enough.
+
+For one lane define A as lifetime committed fixed charges, S as lifetime gross
+on-chain settlement including claim fees, V as current covenant value, and R as
+the server-advertised minimum successor reserve `claimReserveSompi`. Voucher
 acceptance requires:
 
 ```text
@@ -172,7 +183,7 @@ acceptance requires:
 (T - S) + R <= V
 ```
 
-`A - S` is outstanding actual charge and `T - S` is authorization headroom. A
+`A - S` is outstanding committed charge and `T - S` is authorization headroom. A
 claim spends one same-ID input and creates one same-ID successor. If D is the
 gross claim and F is the transaction fee, the provider receives `D - F`, the
 successor value is `V - D`, and successor state becomes `S + D`. A top-up also

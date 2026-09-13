@@ -1,10 +1,15 @@
 import {
+  KASPA_X402_RESOURCE_BUDGET,
+  assertJsonResourceBudget,
+  decodeBoundedJsonBytes,
   decodePaymentRequiredHeader,
+  decodeBoundedJsonHeader,
   decodePaymentSignatureHeader,
   ESCROW_BINDING_ID,
   ESCROW_TEMPLATE_ID,
   KaspaX402Error,
   KASPA_LOCK_TIME_THRESHOLD,
+  TESTNET_10_CONFIRMATION_THRESHOLD,
   toX402ErrorReason,
   X402_VERSION,
   type ResourceInfo,
@@ -12,6 +17,7 @@ import {
 } from "@kaspa-x402/core";
 import {
   DirectModeServer,
+  MemoryPublicBoundaryController,
   PAYMENT_REQUIRED_HEADER,
   PAYMENT_RESPONSE_HEADER,
   PAYMENT_SIGNATURE_HEADER,
@@ -25,6 +31,7 @@ import {
   NativeVoucherVerifier,
   PnnBroadcastChainProvider,
   RestExactHeadReconciler,
+  RestExactSettlementReconciler,
   RestExactTransactionVerifier,
   RestKaspaChainProvider,
   ScriptAddressBook,
@@ -48,6 +55,12 @@ type WaitUntilContext = Pick<ExecutionContext, "waitUntil">;
 const MAX_CANARY_DOC_BYTES = 64 * 1024;
 const MAX_CANARY_JSON_BYTES = 64 * 1024;
 const MAX_ADMIN_JSON_BYTES = 64 * 1024;
+const GATEWAY_PUBLIC_ADMISSION_TTL_MS = 5 * 60 * 1_000;
+// Fast per-isolate and fine-grained backstop. The outer GatewayState lease
+// enforces the configured request cap across the deployment.
+const gatewayPublicBoundary = new MemoryPublicBoundaryController({
+  adapterTimeoutMs: 60_000,
+});
 
 export async function handleGatewayRequest(
   request: Request,
@@ -75,7 +88,7 @@ export async function handleGatewayRequest(
   if (url.pathname === "/" && request.method === "GET")
     return json(indexBody(url), { headers: corsHeaders(config) });
   if (url.pathname === "/health" && request.method === "GET")
-    return healthResponse(config, state);
+    return healthResponse(config);
   if (url.pathname === "/metrics" && request.method === "GET")
     return json(
       { ok: true, metrics: await state.metrics() },
@@ -146,93 +159,204 @@ export async function handleGatewayRequest(
     );
   }
 
-  let gateway: { server: DirectModeServer };
+  let admission: GatewayPublicAdmission;
   try {
-    gateway = await createGateway(config, state);
+    admission = await acquireGatewayPublicAdmission(
+      state,
+      config.globalConcurrency,
+    );
   } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "gateway_public_admission_failed",
+        error: errorMessage(error),
+      }),
+    );
     return json(
-      { ok: false, error: errorMessage(error) },
+      { ok: false, error: "admission_unavailable" },
       { status: 503, headers: corsHeaders(config) },
     );
   }
-  const resource = resourceFor(url, profile);
-  const unsupported = await gatewayUnsupportedPaymentResponse(
-    request,
-    gateway.server,
-    resource,
-    profile,
-    config,
-  );
-  if (unsupported) {
-    context.waitUntil(state.incrementMetric("unsupported_payment_retries"));
-    return withCors(unsupported, config);
+  if (!admission.allowed) {
+    return json(
+      {
+        ok: false,
+        error: "global_concurrency_exceeded",
+        retryAt: new Date(admission.retryAt).toISOString(),
+      },
+      {
+        status: 503,
+        headers: {
+          ...corsHeaders(config),
+          "retry-after": String(
+            Math.max(1, Math.ceil((admission.retryAt - Date.now()) / 1_000)),
+          ),
+        },
+      },
+    );
   }
 
-  context.waitUntil(
-    state.incrementMetric(`requests_${profileMetric(profile)}`),
-  );
-  let result = await gateway.server.handlePaidRequest(
-    {
-      method: request.method,
-      url: url.toString(),
-      headers: request.headers,
+  try {
+    let gateway: { server: DirectModeServer };
+    try {
+      gateway = await createGateway(config, state);
+    } catch (error) {
+      return json(
+        { ok: false, error: errorMessage(error) },
+        { status: 503, headers: corsHeaders(config) },
+      );
+    }
+    const resource = resourceFor(url, profile);
+    const unsupported = await gatewayUnsupportedPaymentResponse(
+      request,
+      gateway.server,
       resource,
-      paymentAmount: amountFor(config, profile),
-      paymentScheme: profile,
-    },
-    async ({ payment, requestFingerprint, paymentIdentifier }) => ({
-      status: 200,
-      headers: { "content-type": "application/json; charset=utf-8" },
-      body: {
-        ok: true,
-        network: config.network,
-        profile,
-        resource: resource.url,
-        requestFingerprint,
-        paymentIdentifier,
-        payment:
-          payment.scheme === "exact"
-            ? {
-                scheme: payment.scheme,
-                transactionId: payment.transactionId,
-                paymentOutputIndex: payment.paymentOutputIndex,
-                finality: payment.finality,
-              }
-            : {
-                scheme: payment.scheme,
-                channelId: payment.channel.channelId,
-                openedChannel: payment.openedChannel,
-                chargedCumulativeAmount:
-                  payment.channel.chargedCumulativeAmount,
-              },
-      },
-      chargedAmount: payment.accepted.amount,
-    }),
-  );
+      profile,
+      config,
+    );
+    if (unsupported) {
+      context.waitUntil(state.incrementMetric("unsupported_payment_retries"));
+      return withCors(unsupported, config);
+    }
 
-  if (
-    profile === "exact" &&
-    config.exactProfile === "additive" &&
-    result.status === 503 &&
-    (result.body as { error?: unknown } | undefined)?.error ===
-      "invalid_payload" &&
-    !(await hostedExactAvailable(config, state))
-  ) {
-    result = {
-      status: 503,
-      headers: {},
-      body: { ok: false, error: "exact_unavailable" },
+    context.waitUntil(
+      state.incrementMetric(`requests_${profileMetric(profile)}`),
+    );
+    let result = await gateway.server.handlePaidRequest(
+      {
+        method: request.method,
+        url: url.toString(),
+        headers: request.headers,
+        resource,
+        paymentAmount: amountFor(config, profile),
+        paymentScheme: profile,
+      },
+      async ({ payment, requestFingerprint, paymentIdentifier }) => ({
+        status: 200,
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: {
+          ok: true,
+          network: config.network,
+          profile,
+          resource: resource.url,
+          requestFingerprint,
+          paymentIdentifier,
+          payment:
+            payment.scheme === "exact"
+              ? {
+                  scheme: payment.scheme,
+                  transactionId: payment.transactionId,
+                  paymentOutputIndex: payment.paymentOutputIndex,
+                  finality: payment.finality,
+                }
+              : {
+                  scheme: payment.scheme,
+                  channelId: payment.channel.channelId,
+                  openedChannel: payment.openedChannel,
+                  chargedCumulativeAmount:
+                    payment.channel.chargedCumulativeAmount,
+                },
+        },
+        chargedAmount: payment.accepted.amount,
+      }),
+    );
+
+    if (
+      profile === "exact" &&
+      config.exactProfile === "additive" &&
+      result.status === 503 &&
+      (result.body as { error?: unknown } | undefined)?.error ===
+        "invalid_payload" &&
+      !(await hostedExactAvailable(config, state))
+    ) {
+      result = {
+        status: 503,
+        headers: {},
+        body: { ok: false, error: "exact_unavailable" },
+      };
+    }
+
+    if (result.status === 402)
+      context.waitUntil(
+        state.incrementMetric(`offers_${profileMetric(profile)}`),
+      );
+    else if (result.status >= 200 && result.status < 300)
+      context.waitUntil(
+        state.incrementMetric(`paid_${profileMetric(profile)}`),
+      );
+    else context.waitUntil(state.incrementMetric("errors_total"));
+    return serverResponse(result, config, request.method === "HEAD");
+  } finally {
+    await admission.release();
+  }
+}
+
+type GatewayPublicAdmission =
+  | { allowed: false; retryAt: number }
+  | { allowed: true; release(): Promise<void> };
+
+async function acquireGatewayPublicAdmission(
+  state: GatewayStateClient,
+  limit: number,
+): Promise<GatewayPublicAdmission> {
+  const token = crypto.randomUUID();
+  const acquired = await state.acquirePublicAdmission(
+    token,
+    Date.now(),
+    limit,
+    GATEWAY_PUBLIC_ADMISSION_TTL_MS,
+  );
+  if (!acquired.allowed) {
+    return {
+      allowed: false,
+      retryAt: acquired.retryAt ?? Date.now() + 1_000,
     };
   }
 
-  if (result.status === 402)
-    context.waitUntil(
-      state.incrementMetric(`offers_${profileMetric(profile)}`),
-    );
-  else if (result.status >= 200 && result.status < 300)
-    context.waitUntil(state.incrementMetric(`paid_${profileMetric(profile)}`));
-  else context.waitUntil(state.incrementMetric("errors_total"));
-  return serverResponse(result, config, request.method === "HEAD");
+  let released = false;
+  let renewalInFlight: Promise<void> = Promise.resolve();
+  const renewal = setInterval(() => {
+    if (released) return;
+    renewalInFlight = renewalInFlight
+      .then(async () => {
+        const result = await state.acquirePublicAdmission(
+          token,
+          Date.now(),
+          limit,
+          GATEWAY_PUBLIC_ADMISSION_TTL_MS,
+        );
+        if (!result.allowed)
+          throw new Error("public admission lease renewal was rejected");
+      })
+      .catch((error: unknown) => {
+        console.error(
+          JSON.stringify({
+            event: "gateway_public_admission_renewal_failed",
+            error: errorMessage(error),
+          }),
+        );
+      });
+  }, Math.floor(GATEWAY_PUBLIC_ADMISSION_TTL_MS / 3));
+
+  return {
+    allowed: true,
+    async release(): Promise<void> {
+      if (released) return;
+      released = true;
+      clearInterval(renewal);
+      await renewalInFlight;
+      try {
+        await state.releasePublicAdmission(token);
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            event: "gateway_public_admission_release_failed",
+            error: errorMessage(error),
+          }),
+        );
+      }
+    },
+  };
 }
 
 export async function runGatewayCanary(
@@ -476,28 +600,37 @@ async function createGateway(
               timeoutMs: config.pnnTimeoutMs,
               attempts: config.pnnAttempts,
             }),
+            TESTNET_10_CONFIRMATION_THRESHOLD,
           )
         : restChainProvider,
     addressCodec,
     voucherVerifier: new NativeVoucherVerifier(),
+    batchPresentationVerifier: new NativeVoucherVerifier(),
     exactTransactionVerifier: new RestExactTransactionVerifier(rest),
+    exactSettlementReconciler: new RestExactSettlementReconciler(rest),
     exactHeadReconciler: new RestExactHeadReconciler(rest),
     topUpVerifier: restChainProvider,
     reconcileExactHeadOnOffer: true,
     lockManager: new DurableGatewayLockManager(state),
     acceptedFinality: "accepted",
+    confirmationThreshold: TESTNET_10_CONFIRMATION_THRESHOLD,
     requirePaymentIdentifier: false,
+    publicBoundaryController: gatewayPublicBoundary,
   });
   return { server };
 }
 
 class AddressRecordingStore implements ServerStateStore {
+  readonly coordinationScope: ServerStateStore["coordinationScope"];
+  readonly coordinationDomain: string;
   readonly #inner: GatewayStateClient;
   readonly #book: ScriptAddressBook;
 
   constructor(inner: GatewayStateClient, book: ScriptAddressBook) {
     this.#inner = inner;
     this.#book = book;
+    this.coordinationScope = inner.coordinationScope;
+    this.coordinationDomain = inner.coordinationDomain;
   }
 
   async loadChannel(channelId: string) {
@@ -506,9 +639,11 @@ class AddressRecordingStore implements ServerStateStore {
     return channel;
   }
 
-  async saveChannel(channel: Parameters<ServerStateStore["saveChannel"]>[0]) {
+  async registerChannel(
+    channel: Parameters<ServerStateStore["registerChannel"]>[0],
+  ) {
     this.#recordChannel(channel);
-    return this.#inner.saveChannel(channel);
+    return this.#inner.registerChannel(channel);
   }
 
   async listChannels() {
@@ -517,8 +652,36 @@ class AddressRecordingStore implements ServerStateStore {
     return channels;
   }
 
-  retireChannel(channelId: string, reason?: string) {
-    return this.#inner.retireChannel(channelId, reason);
+  async applyCovenantLineage(
+    expected: Parameters<ServerStateStore["applyCovenantLineage"]>[0],
+    channel: Parameters<ServerStateStore["applyCovenantLineage"]>[1],
+    leaseId: Parameters<ServerStateStore["applyCovenantLineage"]>[2],
+  ) {
+    this.#recordChannel(channel);
+    return this.#inner.applyCovenantLineage(expected, channel, leaseId);
+  }
+
+  retireChannel(
+    channelId: string,
+    leaseId: string,
+    expected: Parameters<ServerStateStore["retireChannel"]>[2],
+    reason?: string,
+  ) {
+    return this.#inner.retireChannel(channelId, leaseId, expected, reason);
+  }
+
+  claimChannelOperation(
+    record: Parameters<ServerStateStore["claimChannelOperation"]>[0],
+  ) {
+    return this.#inner.claimChannelOperation(record);
+  }
+
+  loadChannelOperation(channelId: string) {
+    return this.#inner.loadChannelOperation(channelId);
+  }
+
+  abandonChannelOperation(leaseId: string, reason: string, observedAt: string) {
+    return this.#inner.abandonChannelOperation(leaseId, reason, observedAt);
   }
 
   loadCommitment(commitmentId: string) {
@@ -544,11 +707,7 @@ class AddressRecordingStore implements ServerStateStore {
     result: Parameters<ServerStateStore["recordBatchHandlerResult"]>[1],
     completedAt: string,
   ) {
-    return this.#inner.recordBatchHandlerResult(
-      attemptId,
-      result,
-      completedAt,
-    );
+    return this.#inner.recordBatchHandlerResult(attemptId, result, completedAt);
   }
 
   markBatchHandlerRecoveryRequired(
@@ -563,8 +722,20 @@ class AddressRecordingStore implements ServerStateStore {
     );
   }
 
+  abandonBatchSettlement(
+    attemptId: string,
+    reason: string,
+    observedAt: string,
+  ) {
+    return this.#inner.abandonBatchSettlement(attemptId, reason, observedAt);
+  }
+
   loadPaymentIdentifier(id: string) {
     return this.#inner.loadPaymentIdentifier(id);
+  }
+
+  loadPaymentIdentifierReservation(id: string) {
+    return this.#inner.loadPaymentIdentifierReservation(id);
   }
 
   loadExactPayment(transactionId: string) {
@@ -712,7 +883,7 @@ class AddressRecordingStore implements ServerStateStore {
     return this.#inner.abandonClaimAttempt(attemptId, reason);
   }
 
-  #recordChannel(channel: Parameters<ServerStateStore["saveChannel"]>[0]) {
+  #recordChannel(channel: Parameters<ServerStateStore["registerChannel"]>[0]) {
     this.#book.recordOutpoint(
       channel.activeOutpoint,
       channel.activeScriptPublicKey,
@@ -721,36 +892,19 @@ class AddressRecordingStore implements ServerStateStore {
   }
 }
 
-async function healthResponse(
-  config: GatewayConfig,
-  state: GatewayStateClient,
-): Promise<Response> {
-  try {
-    const rest = new KaspaRestClient(config.chainApiBase);
-    const chain = await rest.health();
-    return json(
-      {
-        ok: true,
-        enabled: config.enabled,
-        gateway: "kaspa-x402-testnet",
-        hostedExactSettlementEnabled: config.hostedExactSettlementEnabled,
-        exactProfile: config.exactProfile,
-        chainBroadcastMode: config.chainBroadcastMode,
-        pnnEndpoints:
-          config.chainBroadcastMode === "pnn" ? config.pnnEndpoints : [],
-        chain,
-        metrics: await state.metrics(),
-        exactHeads: await exactHeadStats(state),
-        canary: await state.loadCanaryReport(),
-      },
-      { headers: corsHeaders(config) },
-    );
-  } catch (error) {
-    return json(
-      { ok: false, error: errorMessage(error) },
-      { status: 503, headers: corsHeaders(config) },
-    );
-  }
+function healthResponse(config: GatewayConfig): Response {
+  return json(
+    {
+      ok: true,
+      enabled: config.enabled,
+      gateway: "kaspa-x402-testnet",
+      releaseVersion: config.releaseVersion,
+      hostedExactSettlementEnabled: config.hostedExactSettlementEnabled,
+      exactProfile: config.exactProfile,
+      chainBroadcastMode: config.chainBroadcastMode,
+    },
+    { headers: corsHeaders(config) },
+  );
 }
 
 async function exactHeadsAdminResponse(
@@ -764,6 +918,12 @@ async function exactHeadsAdminResponse(
       { ok: false, error: "not_found" },
       { status: 404, headers: corsHeaders(config) },
     );
+  if (!secureAdminTransport(url)) {
+    return json(
+      { ok: false, error: "https_required" },
+      { status: 400, headers: corsHeaders(config) },
+    );
+  }
   if (request.headers.get("authorization") !== `Bearer ${config.adminToken}`) {
     return json(
       { ok: false, error: "unauthorized" },
@@ -921,9 +1081,9 @@ async function supportedKindCheck(
     );
     if (response.status !== 200)
       throw new Error(`expected 200, got ${response.status}`);
-    const body = (await response.json()) as {
+    const body = await readJsonWithLimit<{
       kinds?: Array<{ scheme?: unknown }>;
-    };
+    }>(response, MAX_CANARY_JSON_BYTES, "supported-kind canary");
     if (!body.kinds?.some((kind) => kind.scheme === profile))
       throw new Error(`${profile} support not advertised`);
     return {
@@ -952,7 +1112,11 @@ async function unsupportedSchemeCheck(
     );
     if (response.status !== 402)
       throw new Error(`expected 402, got ${response.status}`);
-    const body = (await response.json()) as { error?: unknown };
+    const body = await readJsonWithLimit<{ error?: unknown }>(
+      response,
+      MAX_CANARY_JSON_BYTES,
+      "unsupported-scheme canary",
+    );
     if (body.error !== "unsupported_scheme")
       throw new Error(`unexpected error ${String(body.error)}`);
     return {
@@ -1065,35 +1229,72 @@ async function readJsonWithLimit<T>(
   label: string,
 ): Promise<T> {
   const length = response.headers.get("content-length");
-  if (length && Number(length) > maxBytes)
+  if (
+    length !== null &&
+    (!/^\d+$/.test(length) || Number(length) > maxBytes)
+  )
     throw new Error(`${label} response too large`);
   const reader = response.body?.getReader();
   if (!reader) throw new Error(`${label} response body is missing`);
-  const decoder = new TextDecoder();
+  const chunks: Uint8Array[] = [];
   let bytes = 0;
-  let text = "";
   for (;;) {
     const chunk = await reader.read();
-    if (chunk.done) {
-      text += decoder.decode();
-      break;
-    }
+    if (chunk.done) break;
     bytes += chunk.value.byteLength;
-    if (bytes > maxBytes) throw new Error(`${label} response too large`);
-    text += decoder.decode(chunk.value, { stream: true });
+    if (bytes > maxBytes) {
+      await reader.cancel();
+      throw new Error(`${label} response too large`);
+    }
+    chunks.push(chunk.value);
   }
-  return JSON.parse(text) as T;
+  const raw = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    raw.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return decodeBoundedJsonBytes(raw, `${label} response body`) as T;
 }
 
-async function readRequestJsonWithLimit<T>(
+export async function readRequestJsonWithLimit<T>(
   request: Request,
   maxBytes: number,
   label: string,
 ): Promise<T> {
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > maxBytes)
+  const maximum = Math.min(
+    maxBytes,
+    KASPA_X402_RESOURCE_BUDGET.maxDecodedHeaderBytes,
+  );
+  const declared = request.headers.get("content-length");
+  if (
+    declared !== null &&
+    (!/^\d+$/.test(declared) || Number(declared) > maximum)
+  )
     throw new Error(`${label} request body too large`);
-  return JSON.parse(text) as T;
+  if (!request.body) throw new Error(`${label} request body is required`);
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    bytes += chunk.value.byteLength;
+    if (bytes > maximum) {
+      await reader.cancel();
+      throw new Error(`${label} request body too large`);
+    }
+    chunks.push(chunk.value);
+  }
+  const raw = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    raw.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const decoded = decodeBoundedJsonBytes(raw, `${label} request body`);
+  assertJsonResourceBudget(decoded, { label: `${label} request body` });
+  return decoded as T;
 }
 
 function exactHeadRegistrations(
@@ -1175,7 +1376,10 @@ function unsafeDecodePaymentHeader(
     };
   } catch {
     try {
-      return JSON.parse(atob(header)) as { accepted?: { scheme?: unknown } };
+      const decoded = decodeBoundedJsonHeader(header);
+      return decoded && typeof decoded === "object"
+        ? (decoded as { accepted?: { scheme?: unknown } })
+        : undefined;
     } catch {
       return undefined;
     }
@@ -1266,11 +1470,18 @@ function profileMetric(profile: Profile): string {
 }
 
 function rateScope(request: Request, profile: Profile): string {
-  const ip =
-    request.headers.get("cf-connecting-ip") ??
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    "unknown";
+  const ip = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
   return `${ip}:${profile}`;
+}
+
+function secureAdminTransport(url: URL): boolean {
+  return (
+    url.protocol === "https:" ||
+    url.hostname === "127.0.0.1" ||
+    url.hostname === "localhost" ||
+    url.hostname === "[::1]" ||
+    url.hostname === "::1"
+  );
 }
 
 function indexBody(url: URL): unknown {

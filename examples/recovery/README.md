@@ -16,3 +16,7 @@ The script demonstrates:
 - refund preview after the refund timeout.
 
 The script does not broadcast transactions. It is a failure-behavior walkthrough for operators before live deployments.
+
+For protected work, the server's recovery contract is stricter than this
+walkthrough: an uncertain handler becomes recovery-required and can resume only
+from a known durable result. A payment retry must never blindly rerun it.

@@ -69,7 +69,23 @@ describe("gateway config", () => {
       claimReserveSompi: "10000000",
       refundTimeoutDaaDelta: "36000",
       minimumRefundLeadDaa: "1000",
+      globalConcurrency: 64,
     });
+  });
+
+  it("bounds deployment-wide concurrency configuration", () => {
+    expect(
+      readGatewayConfig({
+        ...BASE_ENV,
+        KASPA_X402_GLOBAL_CONCURRENCY: "1",
+      }),
+    ).toMatchObject({ globalConcurrency: 1 });
+    expect(() =>
+      readGatewayConfig({
+        ...BASE_ENV,
+        KASPA_X402_GLOBAL_CONCURRENCY: "257",
+      }),
+    ).toThrow("KASPA_X402_GLOBAL_CONCURRENCY is outside range 1-256");
   });
 
   it("requires the batch deposit to cover one route charge plus the advertised claim reserve", () => {
@@ -121,14 +137,14 @@ describe("gateway config", () => {
       enabled: false,
       siteBaseUrl: "https://kaspa-x402.org",
       gatewayBaseUrl: "https://demo.kaspa-x402.org",
-      releaseVersion: "0.1.0-alpha.10",
+      releaseVersion: "1.0.0-rc.1",
     });
   });
 
   it("rejects an invalid release canary version", () => {
     expect(() =>
       readGatewayConfig({ ...BASE_ENV, KASPA_X402_RELEASE_VERSION: "latest" }),
-    ).toThrow("KASPA_X402_RELEASE_VERSION must be an alpha release version");
+    ).toThrow("KASPA_X402_RELEASE_VERSION must be 1.0.0-rc.1");
   });
 
   it("rejects invalid operator switch values", () => {
@@ -181,5 +197,29 @@ describe("gateway config", () => {
           "ws://example.test/kaspa/testnet-10/wrpc/json",
       }),
     ).toThrow("KASPA_X402_PNN_ENDPOINTS must use wss except for localhost");
+  });
+
+  it("rejects credential-bearing and fragmented PNN endpoints", () => {
+    for (const endpoint of [
+      "wss://user:secret@pnn.example.test/wrpc/json",
+      "wss://pnn.example.test/wrpc/json#secret",
+    ]) {
+      expect(() =>
+        readGatewayConfig({
+          ...BASE_ENV,
+          KASPA_X402_CHAIN_BROADCAST_MODE: "pnn",
+          KASPA_X402_PNN_ENDPOINTS: endpoint,
+        }),
+      ).toThrow("must not contain credentials or fragments");
+    }
+  });
+
+  it("rejects credentials in HTTP service URLs", () => {
+    expect(() =>
+      readGatewayConfig({
+        ...BASE_ENV,
+        KASPA_X402_CHAIN_API_BASE: "https://user:secret@api.example.test",
+      }),
+    ).toThrow("KASPA_X402_CHAIN_API_BASE must not contain credentials");
   });
 });

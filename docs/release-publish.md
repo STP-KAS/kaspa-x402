@@ -1,12 +1,12 @@
-# Alpha Publish Checklist
+# Release Publish Checklist
 
-Status: `0.1.0-alpha.10` is published to npm, tagged, released, and deployed on
-`kaspa:testnet-10`. Publishes require npm authorization and must not happen
-accidentally from CI or an unauthenticated shell.
+Status: `1.0.0-rc.1` is a local release candidate. It is not yet published,
+tagged, released, or deployed. Publishes require npm authorization and must not
+happen accidentally from CI or an unauthenticated shell.
 
-Registry note: the `latest` and `alpha` dist-tags both resolve to the current
-published prerelease. Exact prerelease versions remain the reproducible install
-path.
+Registry note: the `latest` and `alpha` dist-tags still resolve to
+`0.1.0-alpha.10`. Publish v1 RC1 under `rc`; do not move `latest`. The `rc`
+tag and exact `1.0.0-rc.1` version are the supported install paths.
 
 Registry workflow note: npm's current release flow stages packages before a
 human proof-of-presence approval. Use npm 11.15 or later to run
@@ -16,7 +16,7 @@ human proof-of-presence approval. Use npm 11.15 or later to run
 
 ## Package Set
 
-Public alpha package set:
+Public release-candidate package set:
 
 - `@kaspa-x402/core`;
 - `@kaspa-x402/covenant`;
@@ -47,10 +47,13 @@ is the sole merchant payment. Unanswered 402s no longer consume inventory.
 their wire formats, transaction construction, verification order, expiry
 rules, commitment preimages, and consensus cross-checks independently
 implementable from the specifications and vectors.
-`0.1.0-alpha.10` keeps both exact profiles unchanged and cleanly replaces the
-batch binding with `kaspa-escrow-v2`: stable KIP-20 lineage, lifetime A/S/T
-accounting, partial claims, same-lineage top-ups, an advertised claim reserve,
-and fresh runtime state with no older-alpha reader or migration.
+`0.1.0-alpha.10` kept both exact profiles unchanged and replaced the batch
+binding with `kaspa-escrow-v2`: stable KIP-20 lineage, lifetime A/S/T
+accounting, partial claims, same-lineage top-ups, and an advertised claim
+reserve. `1.0.0-rc.1` cleanly replaces that binding with
+`kaspa-escrow-v3` and its covenant with `kaspa-x402-escrow-v4`, adds
+one-lineage-to-one-channel enforcement, and uses fresh runtime state with no
+older-alpha reader or migration.
 
 `@kaspa-x402/facilitator` and `@kaspa-x402/cli` remain private for now. They
 are useful in the repository, but they should not be published until the public
@@ -102,21 +105,21 @@ The publishable packages have a `prepack` guard that fails if `dist/index.js`
 or `dist/index.d.ts` is missing. This prevents accidental tarballs with broken
 entrypoints.
 
-## Alpha.10 Release Sequence
+## v1 RC1 Release Sequence
 
 Use this order; every publish, deployment, tag, and release remains a separate
 explicitly authorized operator action:
 
-1. Freeze the approved source, then create the new immutable Alpha.10 snapshot
+1. Freeze the approved source, then create the new immutable v1 RC1 snapshot
    and content lock. Do not modify an older snapshot.
 2. Put that complete candidate, including its snapshot and lock, in a clean
-   checkout and pass `npm run validate:release` with the v2 covenant consensus
+   checkout and pass `npm run validate:release` with the v3/v4 covenant consensus
    sequence and both exact and batch interop drift gates.
 3. Install and import the four real local tarballs in a clean temporary project,
    record their hashes, then stage, approve, and verify the npm packages.
 4. Deploy and verify the locked static site at the apex and `www` before the
-   Worker, because the Worker canary checks the Alpha.10 snapshot.
-5. Cut over to fresh `demo-gateway-alpha.10` state, run funded batch and exact
+   Worker, because the Worker canary checks the v1 RC1 snapshot.
+5. Cut over to fresh `demo-gateway-v1.0.0-rc.1` state, run funded batch and exact
    canaries, then separately record deployment evidence, tag, and release.
 
 ## Alpha.10 Release Recheck
@@ -324,8 +327,8 @@ The expected current live proof must include:
 - tiny and normal standard-native exact settlement and replay rejection;
 - additive exact settlement proving the KIP-10 successor delta equals the
   advertised amount and no second merchant payment output exists;
-- at least two durable head shards, concurrent conflict, loser refresh, and
-  successful retry;
+- at least two durable head shards and concurrent conflict with the unresolved
+  loser held pending without a replacement signature;
 - duplicate idempotency and invalid-signature rejection before protected work;
 - post-broadcast runtime recovery and trusted external head reconciliation;
 - verified singleton KIP-20 batch genesis and deposit-voucher settlement;
@@ -444,20 +447,20 @@ Publishing requires an authenticated npm account with access to the
 `@kaspa-x402` scope. The unscoped `kaspa-x402` package name does not prove scope
 control.
 
-Publish with `--tag alpha`. Do not advertise tagless or `latest` installs for
-alpha releases.
+Stage and approve with `--tag rc`. Do not publish or move the `latest` tag for
+this release candidate.
 
 ```sh
-npm publish --workspace @kaspa-x402/core --tag alpha --access public
-npm publish --workspace @kaspa-x402/covenant --tag alpha --access public
-npm publish --workspace @kaspa-x402/client --tag alpha --access public
-npm publish --workspace @kaspa-x402/server --tag alpha --access public
+npm stage publish --workspace @kaspa-x402/core --tag rc --access public
+npm stage publish --workspace @kaspa-x402/covenant --tag rc --access public
+npm stage publish --workspace @kaspa-x402/client --tag rc --access public
+npm stage publish --workspace @kaspa-x402/server --tag rc --access public
 ```
 
 After publish, verify from a clean project:
 
 ```sh
-npm install @kaspa-x402/core@alpha @kaspa-x402/covenant@alpha @kaspa-x402/client@alpha @kaspa-x402/server@alpha
+npm install @kaspa-x402/core@rc @kaspa-x402/covenant@rc @kaspa-x402/client@rc @kaspa-x402/server@rc
 node -e "import('@kaspa-x402/core').then(() => console.log('ok'))"
 ```
 
@@ -470,18 +473,17 @@ npm view @kaspa-x402/client dist-tags
 npm view @kaspa-x402/server dist-tags
 ```
 
-If npm keeps `latest` on the first published prerelease and rejects deleting it
-because no alternate stable version exists, do not advertise tagless installs.
-Use explicit `@alpha` installs until a stable version can own `latest`.
+Verify that `rc` resolves to `1.0.0-rc.1` and that `latest` still resolves to
+`0.1.0-alpha.10`. Use explicit `@rc` installs until stable `1.0.0` is approved.
 
 ## Release Caveats
 
-Every alpha release note should state:
+The RC release note must state:
 
 - testnet-oriented reference implementation;
 - no production custody system;
 - no mainnet readiness claim;
-- package APIs and wire details can change before the first stable spec tag;
+- package APIs and wire details can change before stable `1.0.0`;
 - alpha.9 exact supports signed `exact-transaction` artifacts under default
   standard-native or optional durable additive-head semantics;
 - live proof evidence is testnet-only.

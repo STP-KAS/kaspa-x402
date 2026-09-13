@@ -1,12 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  KASPA_X402_RESOURCE_BUDGET,
   X402_VERSION,
+  type AcceptedTransactionEvidence,
+  batchPaymentRequirementsHash,
+  batchPresentationDigest,
+  bindRequestHashToTrustedContext,
   channelId,
   exactAuthorizationExpiresAt,
   exactRequestAuthorizationDigest,
   exactRequestAuthorizationId,
   readKaspaSettlementExtension,
+  paymentIdentifierExtension,
   sha256Hex,
   stableStringify,
   voucherDigest,
@@ -19,14 +25,16 @@ import {
   type Hash32Hex,
   type NetworkId,
   type PaymentPayload,
+  type TrustedSecurityContext,
 } from "@kaspa-x402/core";
 import {
-  deriveEscrowV2Address,
-  escrowV2ScriptPublicKey,
+  deriveEscrowAddress,
+  escrowScriptPublicKey,
   serializedScriptPublicKey,
 } from "@kaspa-x402/covenant";
 import {
   DirectModeServer,
+  MemoryChannelLockManager,
   MemoryServerChannelStore,
   type AddressCodec,
   type ChainUtxo,
@@ -34,11 +42,12 @@ import {
   type DirectModeServerConfig,
   type ServerChainProvider,
   type ServerChannelRecord,
-  type SettlementFinality,
+  type SendTransactionResult,
 } from "@kaspa-x402/server";
 import {
   DirectModeFacilitator,
   handleFacilitatorRequest,
+  readFacilitatorRequestBody,
 } from "../src/index.js";
 
 const SERVER_KEY = "11".repeat(32);
@@ -51,8 +60,109 @@ const EXACT_TRANSACTION_ARTIFACT = '{"transaction":"signed-kip10-exact"}';
 const RESOURCE = { url: "https://api.example.test/data" };
 const REQUEST_HASH = "99".repeat(32);
 const OTHER_REQUEST_HASH = "98".repeat(32);
+const CONFIRMATION_THRESHOLD = 30;
+
+function acceptedChainEvidence(
+  transactionId: string,
+): AcceptedTransactionEvidence {
+  const checkpointBlueScore = 1_000n;
+  return {
+    status: "accepted",
+    transactionId: transactionId.toLowerCase(),
+    acceptingBlockHash: sha256Hex(
+      `accepting-block:${transactionId.toLowerCase()}`,
+    ),
+    acceptingBlockBlueScore: (
+      checkpointBlueScore - BigInt(CONFIRMATION_THRESHOLD) + 1n
+    ).toString(),
+    confirmationCount: CONFIRMATION_THRESHOLD,
+    checkpoint: {
+      blockHash: "ee".repeat(32),
+      blueScore: checkpointBlueScore.toString(),
+      daaScore: "1000",
+    },
+  };
+}
 
 describe("direct-mode facilitator", () => {
+  it("accepts the facilitator byte maximum and rejects maximum plus one", async () => {
+    const maximum = KASPA_X402_RESOURCE_BUDGET.maxDecodedHeaderBytes;
+    const json = '{"ok":true}';
+    await expect(
+      readFacilitatorRequestBody(
+        new Request("https://facilitator.example.test/verify", {
+          method: "POST",
+          body: `${json}${" ".repeat(maximum - json.length)}`,
+        }),
+      ),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      readFacilitatorRequestBody(
+        new Request("https://facilitator.example.test/verify", {
+          method: "POST",
+          body: `${json}${" ".repeat(maximum - json.length + 1)}`,
+        }),
+      ),
+    ).rejects.toThrow("decoded limit");
+  });
+
+  it("cancels a facilitator body that stalls past its deadline", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull: () => new Promise<void>(() => undefined),
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    await expect(
+      readFacilitatorRequestBody(
+        { body, headers: new Headers() },
+        { timeoutMs: 10 },
+      ),
+    ).rejects.toThrow("timed out");
+    expect(cancelled).toBe(true);
+  });
+
+  it("cancels a facilitator body when the caller aborts", async () => {
+    const controller = new AbortController();
+    const body = new ReadableStream<Uint8Array>({
+      pull: () => new Promise<void>(() => undefined),
+    });
+    const reading = readFacilitatorRequestBody({
+      body,
+      headers: new Headers(),
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(reading).rejects.toThrow("was aborted");
+  });
+
+  it("rejects over-budget raw facilitator input before verifier or chain work", async () => {
+    let verifierCalls = 0;
+    const { facilitator, chain } = makeFacilitator({
+      exactTransactionVerifier: {
+        verifyExactPayment() {
+          verifierCalls += 1;
+          throw new Error("unreachable");
+        },
+      },
+    });
+
+    const response = await handleFacilitatorRequest(facilitator, {
+      method: "POST",
+      path: "/verify",
+      body: "x".repeat(
+        KASPA_X402_RESOURCE_BUDGET.maxDecodedHeaderBytes + 1,
+      ),
+    });
+
+    expect(response.status).toBe(400);
+    expect(verifierCalls).toBe(0);
+    expect(chain.readCount).toBe(0);
+  });
+
   it("returns supported x402 kinds without hardcoded signer identity", async () => {
     const { facilitator } = makeFacilitator();
 
@@ -383,13 +493,52 @@ describe("direct-mode facilitator", () => {
     });
   });
 
-  it("settles batch deposit vouchers with actual charge below the signed ceiling", async () => {
+  it("settles exact payments with trusted context bound exactly once", async () => {
+    const { facilitator, server } = makeFacilitator();
+    const trustedSecurityContext = {
+      principal: "user:alpha",
+      tenant: "tenant:one",
+      authorizationScopes: ["download"],
+    } satisfies TrustedSecurityContext;
+    const requestFingerprint = bindRequestHashToTrustedContext(
+      REQUEST_HASH,
+      trustedSecurityContext,
+    );
+    const paymentPayload = makeExactPayment(server);
+    if (paymentPayload.payload.type !== "exact-transaction") {
+      throw new Error("expected exact payment");
+    }
+    paymentPayload.payload.requestHash = requestFingerprint;
+    paymentPayload.payload.authorization = fakeExactAuthorization(
+      paymentPayload.accepted as ExactPaymentRequirements,
+      requestFingerprint,
+    );
+    const request = {
+      x402Version: X402_VERSION,
+      paymentPayload,
+      paymentRequirements: paymentPayload.accepted,
+      resource: RESOURCE,
+      requestHash: REQUEST_HASH,
+    };
+
+    await expect(
+      facilitator.verify(request, trustedSecurityContext),
+    ).resolves.toMatchObject({ isValid: true });
+    await expect(
+      facilitator.settle(request, trustedSecurityContext),
+    ).resolves.toMatchObject({ success: true, transaction: EXACT_TX_ID });
+    await expect(
+      facilitator.settle(request, {
+        ...trustedSecurityContext,
+        principal: "user:beta",
+      }),
+    ).resolves.toMatchObject({ success: false });
+  });
+
+  it("settles batch deposit vouchers at the payer-approved fixed charge", async () => {
     const { facilitator, server, chain } = makeFacilitator();
     const paymentPayload = makeDepositPayment(server, chain);
-    const paymentRequirements = {
-      ...paymentPayload.accepted,
-      amount: "70",
-    } as BatchPaymentRequirements;
+    const paymentRequirements = paymentPayload.accepted;
 
     const settlement = await facilitator.settle({
       x402Version: X402_VERSION,
@@ -404,13 +553,63 @@ describe("direct-mode facilitator", () => {
     });
     const settlementExtra = readKaspaSettlementExtension(settlement);
     expect(settlement.transaction).toBe(settlementExtra?.commitmentId);
-    expect(settlement.amount).toBe("70");
-    expect(settlementExtra?.chargedAmount).toBe("70");
+    expect(settlement.amount).toBe("100");
+    expect(settlementExtra?.chargedAmount).toBe("100");
     expect(settlementExtra?.fundingAmount).toBe("1000");
     expect(settlementExtra?.channelState).toMatchObject({
-      chargedCumulativeAmount: "70",
-      signedMaxClaimable: "100",
+      authorizedCumulativeAmount: "100",
+      claimedCumulativeAmount: "0",
     });
+  });
+
+  it("settles batch payments with trusted context bound exactly once", async () => {
+    const { facilitator, server, chain } = makeFacilitator();
+    const trustedSecurityContext = {
+      principal: "user:alpha",
+      tenant: "tenant:one",
+      authorizationScopes: ["download"],
+    } satisfies TrustedSecurityContext;
+    const requestFingerprint = bindRequestHashToTrustedContext(
+      REQUEST_HASH,
+      trustedSecurityContext,
+    );
+    const accepted = server.buildPaymentRequired({
+      resource: RESOURCE,
+      scheme: "batch-settlement",
+      trustedSecurityContext,
+    }).accepts[0] as BatchPaymentRequirements;
+    const paymentPayload = makeDepositPayment(server, chain);
+    if (paymentPayload.payload.type !== "deposit-voucher") {
+      throw new Error("expected deposit payment");
+    }
+    paymentPayload.accepted = accepted;
+    paymentPayload.payload.presentation = signBatchPresentation({
+      accepted,
+      channelId: paymentPayload.payload.channelId,
+      covenantId: paymentPayload.payload.voucher.covenantId,
+      voucher: paymentPayload.payload.voucher,
+      requestFingerprint,
+    });
+    const request = {
+      x402Version: X402_VERSION,
+      paymentPayload,
+      paymentRequirements: accepted,
+      resource: RESOURCE,
+      requestHash: REQUEST_HASH,
+    };
+
+    await expect(
+      facilitator.verify(request, trustedSecurityContext),
+    ).resolves.toMatchObject({ isValid: true });
+    await expect(
+      facilitator.settle(request, trustedSecurityContext),
+    ).resolves.toMatchObject({ success: true });
+    await expect(
+      facilitator.settle(request, {
+        ...trustedSecurityContext,
+        principal: "user:beta",
+      }),
+    ).resolves.toMatchObject({ success: false });
   });
 
   it("rejects malformed facilitator requests at the HTTP adapter boundary", async () => {
@@ -577,7 +776,7 @@ describe("direct-mode facilitator", () => {
           scheme: "batch-settlement",
           network: "kaspa:testnet-10",
           extra: {
-            binding: "kaspa-escrow-v2",
+            binding: "kaspa-escrow-v3",
             modes: ["verify", "settle"],
           },
         },
@@ -657,7 +856,7 @@ describe("direct-mode facilitator", () => {
           scheme: "batch-settlement",
           network: "kaspa:testnet-10",
           extra: {
-            binding: "kaspa-escrow-v2",
+            binding: "kaspa-escrow-v3",
             modes: ["claim", "refund"],
           },
         },
@@ -701,7 +900,7 @@ describe("direct-mode facilitator", () => {
           scheme: "batch-settlement",
           network: "kaspa:testnet-10",
           extra: {
-            binding: "kaspa-escrow-v2",
+            binding: "kaspa-escrow-v3",
             modes: ["claim"],
           },
         },
@@ -719,7 +918,7 @@ describe("direct-mode facilitator", () => {
           channelId: depositPayload.channelId,
           fundingOutpoint: depositPayload.fundingOutpoint,
           activeScriptPublicKey: depositPayload.activeScriptPublicKey,
-          claimAmount: depositPayload.voucher.amount,
+          claimAmount: depositPayload.voucher.authorizedCumulativeAmount,
           voucher: depositPayload.voucher,
         },
       } as PaymentPayload,
@@ -747,7 +946,7 @@ describe("direct-mode facilitator", () => {
           scheme: "batch-settlement",
           network: "kaspa:testnet-10",
           extra: {
-            binding: "kaspa-escrow-v2",
+            binding: "kaspa-escrow-v3",
             modes: ["claim"],
           },
         },
@@ -763,7 +962,7 @@ describe("direct-mode facilitator", () => {
         channelId: depositPayload.channelId,
         fundingOutpoint: depositPayload.fundingOutpoint,
         activeScriptPublicKey: depositPayload.activeScriptPublicKey,
-        claimAmount: depositPayload.voucher.amount,
+        claimAmount: depositPayload.voucher.authorizedCumulativeAmount,
         voucher: depositPayload.voucher,
       },
     } as PaymentPayload;
@@ -796,7 +995,7 @@ describe("direct-mode facilitator", () => {
           scheme: "batch-settlement",
           network: "kaspa:testnet-10",
           extra: {
-            binding: "kaspa-escrow-v2",
+            binding: "kaspa-escrow-v3",
             modes: ["refund"],
           },
         },
@@ -816,7 +1015,7 @@ describe("direct-mode facilitator", () => {
           fundingOutpoint: depositPayload.fundingOutpoint,
           activeScriptPublicKey: depositPayload.activeScriptPublicKey,
           refundAddress: depositPayload.channelConfig.refundAddress,
-          refundAmount: depositPayload.voucher.amount,
+          refundAmount: depositPayload.voucher.authorizedCumulativeAmount,
           clientSignature: "12".repeat(65),
         },
       } as PaymentPayload,
@@ -867,7 +1066,8 @@ describe("direct-mode facilitator", () => {
   });
 
   it("checks exact replay after deriving the exact-transaction id", async () => {
-    const initial = makeFacilitator();
+    const lockManager = new MemoryChannelLockManager();
+    const initial = makeFacilitator({ lockManager });
     const paymentPayload = makeExactPayment(initial.server);
     const settlement = await initial.facilitator.settle({
       x402Version: X402_VERSION,
@@ -896,6 +1096,7 @@ describe("direct-mode facilitator", () => {
     }));
     const replaySetup = makeFacilitator({
       store: initial.store,
+      lockManager,
       exactTransactionVerifier: {
         verifyExactPayment: verifier,
       },
@@ -1060,6 +1261,7 @@ function makeFacilitator(
       "exactTransactionVerifier",
     ) && suppliedExactVerifier === undefined;
   const server = new DirectModeServer({
+    confirmationThreshold: CONFIRMATION_THRESHOLD,
     network: "kaspa:testnet-10",
     payTo: "kaspatest:payout",
     serverPublicKey: SERVER_KEY,
@@ -1074,6 +1276,11 @@ function makeFacilitator(
     voucherVerifier: {
       verifyVoucher({ digest, voucher }) {
         return voucher.signature === `${digest}${digest}`;
+      },
+    },
+    batchPresentationVerifier: {
+      verifyPresentation({ digest, signature }) {
+        return signature === `${digest}${digest}`;
       },
     },
     exactProfile: "standard-native",
@@ -1133,6 +1340,12 @@ function makeStandardExactPayment(server: DirectModeServer): PaymentPayload {
       requestHash: REQUEST_HASH,
       authorization,
     },
+    extensions: {
+      "payment-identifier": paymentIdentifierExtension({
+        required: true,
+        id: `exact_${REQUEST_HASH}`,
+      }),
+    },
   };
 }
 
@@ -1188,7 +1401,7 @@ function makeDepositPayment(
   const channelConfig: ChannelConfig = {
     network: accepted.network,
     asset: "KAS",
-    templateId: "kaspa-x402-escrow-v2",
+    templateId: "kaspa-x402-escrow-v4",
     clientPublicKey: CLIENT_KEY,
     serverPublicKey: SERVER_KEY,
     payTo: accepted.payTo,
@@ -1203,7 +1416,14 @@ function makeDepositPayment(
     covenantId: COVENANT_ID,
     amount: accepted.extra.minDepositSompi,
     scriptPublicKey: derived.activeScriptPublicKey,
+    acceptance: acceptedChainEvidence(fundingOutpoint.txid),
     finality: "accepted",
+  });
+  const id = channelId(channelConfig);
+  const voucher = signVoucher({
+    network: accepted.network,
+    covenantId: COVENANT_ID,
+    amount: accepted.amount,
   });
   return {
     x402Version: X402_VERSION,
@@ -1211,15 +1431,17 @@ function makeDepositPayment(
     payload: {
       type: "deposit-voucher",
       channelConfig,
-      channelId: channelId(channelConfig),
+      channelId: id,
       escrowAddress: derived.escrowAddress,
       fundingOutpoint,
       fundingAmountSompi: accepted.extra.minDepositSompi,
       activeScriptPublicKey: derived.activeScriptPublicKey,
-      voucher: signVoucher({
-        network: accepted.network,
+      voucher,
+      presentation: signBatchPresentation({
+        accepted,
+        channelId: id,
         covenantId: COVENANT_ID,
-        amount: accepted.amount,
+        voucher,
       }),
     },
   };
@@ -1253,11 +1475,11 @@ function deriveEscrow(channelConfig: ChannelConfig): {
     payoutScriptPublicKeyHash,
     refundScriptPublicKeyHash,
     timeoutDaa: channelConfig.refundTimeoutDaa,
-    settledTotal: "0",
+    claimedCumulativeAmount: "0",
   };
-  const script = escrowV2ScriptPublicKey(params);
+  const script = escrowScriptPublicKey(params);
   return {
-    escrowAddress: deriveEscrowV2Address(params, (input) =>
+    escrowAddress: deriveEscrowAddress(params, (input) =>
       addressCodec.encodeScriptAddress(input),
     ),
     activeScriptPublicKey: serializedScriptPublicKey(script),
@@ -1269,12 +1491,45 @@ function signVoucher(input: {
   covenantId: Hash32Hex;
   amount: string;
 }) {
-  const digest = voucherDigest(input);
+  const digest = voucherDigest({
+    network: input.network,
+    covenantId: input.covenantId,
+    authorizedCumulativeAmount: input.amount,
+  });
   return {
     covenantId: input.covenantId,
-    amount: input.amount,
+    authorizedCumulativeAmount: input.amount,
     signature: `${digest}${digest}`,
   };
+}
+
+function signBatchPresentation(input: {
+  accepted: BatchPaymentRequirements;
+  channelId: Hash32Hex;
+  covenantId: Hash32Hex;
+  voucher: { authorizedCumulativeAmount: string };
+  requestFingerprint?: Hash32Hex;
+}) {
+  const unsigned = {
+    version: "kaspa-x402-batch-presentation-v1" as const,
+    requestFingerprint: input.requestFingerprint ?? REQUEST_HASH,
+    acceptedRequirementsHash: batchPaymentRequirementsHash(input.accepted),
+    securityContextHash: input.accepted.extra.securityContextHash,
+    channelId: input.channelId,
+    covenantId: input.covenantId,
+    voucherDigest: voucherDigest({
+      network: input.accepted.network,
+      covenantId: input.covenantId,
+      authorizedCumulativeAmount: input.voucher.authorizedCumulativeAmount,
+    }),
+    paymentIdentifier: null,
+    nonce: SALT,
+    expiresAt: new Date(
+      Date.now() + input.accepted.maxTimeoutSeconds * 1_000 - 1_000,
+    ).toISOString(),
+  };
+  const digest = batchPresentationDigest(unsigned);
+  return { ...unsigned, digest, signature: `${digest}${digest}` };
 }
 
 class FakeAddressCodec implements AddressCodec {
@@ -1290,20 +1545,24 @@ class FakeAddressCodec implements AddressCodec {
 class FakeChainProvider implements ServerChainProvider {
   readonly utxos = new Map<string, ChainUtxo>();
   daa = "0";
+  readCount = 0;
 
   setUtxo(utxo: ChainUtxo): void {
     this.utxos.set(outpointKey(utxo.outpoint), structuredClone(utxo));
   }
 
   async getUtxo(outpoint: FundingOutpoint, _network: NetworkId) {
+    this.readCount += 1;
     return this.utxos.get(outpointKey(outpoint)) ?? null;
   }
 
   async getVirtualDaaScore() {
+    this.readCount += 1;
     return this.daa;
   }
 
   async verifyCovenantGenesis(request: CovenantGenesisVerificationRequest) {
+    this.readCount += 1;
     return {
       covenantId: request.utxo.covenantId!,
       authorizingInput: { txid: "46".repeat(32), index: 0 },
@@ -1312,6 +1571,20 @@ class FakeChainProvider implements ServerChainProvider {
       genesisAmount: request.utxo.amount,
       totalOutputCount: 1,
       authorizedOutputCount: 1,
+      acceptance: request.utxo.acceptance,
+    };
+  }
+
+  async discoverCovenantLineage(
+    request: Parameters<ServerChainProvider["discoverCovenantLineage"]>[0],
+  ) {
+    this.readCount += 1;
+    return {
+      fromCheckpoint: request.lineage.checkpoint,
+      checkpoint: request.lineage.checkpoint,
+      continuity: "complete" as const,
+      removedChainBlockHashes: [],
+      addedChainBlocks: [],
     };
   }
 
@@ -1320,9 +1593,16 @@ class FakeChainProvider implements ServerChainProvider {
   }
 
   async sendTransaction(
-    _transaction: string,
-  ): Promise<{ transactionId: Hash32Hex; finality: SettlementFinality }> {
-    return { transactionId: EXACT_TX_ID, finality: "accepted" };
+    transaction: string,
+  ): Promise<SendTransactionResult> {
+    const transactionId = /^[0-9a-f]{64}$/.test(transaction)
+      ? transaction
+      : EXACT_TX_ID;
+    return {
+      transactionId,
+      evidence: acceptedChainEvidence(transactionId),
+      finality: "accepted",
+    };
   }
 }
 

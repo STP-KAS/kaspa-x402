@@ -3,7 +3,12 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { decodePaymentRequiredHeader } from "../packages/core/dist/index.js";
+import {
+  decodePaymentRequiredHeader,
+  ESCROW_BINDING_ID,
+  ESCROW_TEMPLATE_ID,
+} from "../packages/core/dist/index.js";
+import { readBoundedResponseText } from "./read-bounded-response.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const gatewayDir = path.join(root, "packages/demo-gateway");
@@ -15,6 +20,7 @@ const port = Number(
 );
 const base = `http://127.0.0.1:${port}`;
 const output = [];
+const MAX_RESPONSE_BYTES = 256 * 1024;
 
 const child = spawn(
   "npx",
@@ -52,11 +58,11 @@ async function smokeGateway(baseUrl) {
   const health = await getJson(`${baseUrl}/health`);
   const canary = await getJson(`${baseUrl}/canary`);
   const supported = await getJson(`${baseUrl}/supported`);
-  const exact = await fetch(`${baseUrl}/exact`);
+  const exact = await smokeFetch(`${baseUrl}/exact`);
   const exactRequired = decodePaymentRequiredHeader(
     exact.headers.get("PAYMENT-REQUIRED"),
   );
-  const batch = await fetch(`${baseUrl}/batch`);
+  const batch = await smokeFetch(`${baseUrl}/batch`);
   const batchRequired = decodePaymentRequiredHeader(
     batch.headers.get("PAYMENT-REQUIRED"),
   );
@@ -70,7 +76,7 @@ async function smokeGateway(baseUrl) {
   const unsupported = await getJson(`${baseUrl}/batch`, {
     headers: { "PAYMENT-SIGNATURE": unsupportedHeader },
   });
-  const head = await fetch(`${baseUrl}/batch`, { method: "HEAD" });
+  const head = await smokeFetch(`${baseUrl}/batch`, { method: "HEAD" });
 
   assert(
     health.status === 200 && health.body.ok === true,
@@ -82,8 +88,8 @@ async function smokeGateway(baseUrl) {
     "canary endpoint failed",
   );
   assert(
-    health.body.chain?.networkName === "kaspa-testnet-10",
-    `unexpected network ${health.body.chain?.networkName}`,
+    health.body.releaseVersion === "1.0.0-rc.1",
+    `unexpected release ${health.body.releaseVersion}`,
   );
   assert(
     exact.status === 402,
@@ -101,22 +107,30 @@ async function smokeGateway(baseUrl) {
     exactRequired.accepts[0]?.extra?.profile === "standard-native",
     "exact offer profile changed",
   );
+  assert(
+    exactRequired.accepts[0]?.maxTimeoutSeconds === 300,
+    "exact offer timeout is too short for funded Testnet settlement",
+  );
   assert(batch.status === 402, `expected batch 402, got ${batch.status}`);
   assert(
     batchRequired.accepts[0]?.scheme === "batch-settlement",
     "batch offer did not advertise batch-settlement",
   );
   assert(
-    batchRequired.accepts[0]?.extra?.binding === "kaspa-escrow-v2",
-    "batch offer did not advertise the Alpha.10 escrow binding",
+    batchRequired.accepts[0]?.extra?.binding === ESCROW_BINDING_ID,
+    "batch offer did not advertise the v1 RC1 escrow binding",
   );
   assert(
-    batchRequired.accepts[0]?.extra?.templateId === "kaspa-x402-escrow-v2",
+    batchRequired.accepts[0]?.extra?.templateId === ESCROW_TEMPLATE_ID,
     "batch offer did not advertise the KIP-20 escrow template",
   );
   assert(
     batchRequired.accepts[0]?.extra?.claimReserveSompi === "10000000",
-    "batch offer did not advertise the Alpha.10 claim reserve",
+    "batch offer did not advertise the v1 RC1 claim reserve",
+  );
+  assert(
+    batchRequired.accepts[0]?.maxTimeoutSeconds === 300,
+    "batch offer timeout is too short for funded Testnet settlement",
   );
   assert(
     unsupported.status === 402 &&
@@ -136,16 +150,16 @@ async function smokeGateway(baseUrl) {
     (kind) => kind.scheme === "batch-settlement",
   );
   assert(
-    supportedBatch?.extra?.binding === "kaspa-escrow-v2" &&
-      supportedBatch?.extra?.templateId === "kaspa-x402-escrow-v2",
-    "supported endpoint did not expose the Alpha.10 KIP-20 batch kind",
+    supportedBatch?.extra?.binding === ESCROW_BINDING_ID &&
+      supportedBatch?.extra?.templateId === ESCROW_TEMPLATE_ID,
+    "supported endpoint did not expose the v1 RC1 KIP-20 batch kind",
   );
 
   return {
     url: baseUrl,
     health: {
-      networkName: health.body.chain.networkName,
-      virtualDaaScore: health.body.chain.virtualDaaScore,
+      releaseVersion: health.body.releaseVersion,
+      chainBroadcastMode: health.body.chainBroadcastMode,
     },
     supported: supported.body.kinds.map(
       (kind) => `${kind.scheme}:${kind.network}`,
@@ -176,7 +190,7 @@ async function waitForReady() {
       );
     }
     try {
-      const health = await fetch(`${base}/health`);
+      const health = await smokeFetch(`${base}/health`);
       if (health.status === 200) return;
     } catch (error) {
       lastError = error;
@@ -189,11 +203,24 @@ async function waitForReady() {
 }
 
 async function getJson(url, init) {
-  const response = await fetch(url, init);
+  const response = await smokeFetch(url, init);
   return {
     status: response.status,
-    body: await response.json(),
+    body: JSON.parse(
+      await readBoundedResponseText(response, {
+        maxBytes: MAX_RESPONSE_BYTES,
+        tooLargeMessage: "gateway smoke response exceeded the size limit",
+      }),
+    ),
   };
+}
+
+async function smokeFetch(url, init = {}) {
+  return fetch(url, {
+    ...init,
+    redirect: "error",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
 }
 
 async function openPort() {

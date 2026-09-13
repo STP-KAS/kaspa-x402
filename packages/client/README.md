@@ -2,7 +2,7 @@
 
 Client SDK for direct-mode Kaspa x402 payments.
 
-Status: alpha. This package targets testnet iteration and mock/local examples;
+Status: release candidate. This package targets testnet iteration and mock/local examples;
 it is not a production wallet, custody, or mainnet funding system.
 
 The current implementation covers HTTP paid fetch and MCP paid tool calls for `exact` one-shot transfers and `batch-settlement` escrow channels:
@@ -20,13 +20,34 @@ The current implementation covers HTTP paid fetch and MCP paid tool calls for `e
   covenant ID while persisting the rotating current outpoint;
 - applies same-lineage top-ups without resetting A/S/T and exposes the current
   A/S/T/V/R accounting state;
-- verifies `PAYMENT-RESPONSE` transaction, amount, output index, finality, and channel state before advancing local charged amounts;
+- validates `PAYMENT-RESPONSE` acknowledgement metadata; exact finality comes
+  only from a trusted chain reconciler, while batch responses advance verified
+  channel accounting;
 - detects MCP payment-required tool results, binds the tool-call fingerprint to
   a required configured server `audience`, retries with
   `_meta["x402/payment"]`, and applies `_meta["x402/payment-response"]`;
 - exposes refund eligibility and a crash-safe, digest-bound refund workflow
   through injected transaction, broadcast, persistence, and reconciliation
-  adapters.
+  adapters;
+- persists an immutable covenant launch manifest and append-only selected-chain
+  journal, deriving the live head locally from verified lineage.
+
+The client exposes and selects `batch-settlement` only when its funding
+provider implements authoritative `discoverCovenantLineage` recovery and
+`authorizeBatchPayment`, and `FundingPolicy.batchPayment` supplies every
+payer-owned cap. The authorization callback receives the complete immutable
+open, voucher-increase, or top-up intent and must return its exact digest.
+Missing policy, missing approval, a changed digest, or a cap violation fails
+before identity creation, key generation, transaction preparation, signing, or
+broadcast. A REST UTXO reader without selected-chain lineage proof is
+exact-only.
+
+For paid MCP calls, an advertised non-zero `mcpErrorChargeSompi` is included in
+that payer intent. An `isError` result carrying a successful batch settlement
+is accepted only when the settlement amount equals the explicitly approved
+fixed error charge; otherwise the channel is quarantined.
+Successful charged errors also expose `errorCharge.approvedAmount` and
+`errorCharge.settledAmount` on the `paidMcpToolCall()` result.
 
 Mainnet funding fails closed unless `allowMainnet: true` is set. The default
 offer selector accepts only `kaspa:testnet-10`; operators that opt into mainnet
@@ -34,12 +55,31 @@ must provide explicit funding, signer, node, custody, and review controls.
 
 Wallet, node, address-codec, and transaction-builder behavior is injected through typed adapters. Amounts on the wire remain decimal sompi strings.
 
+## Durable Exact Attempts
+
+Every exact payment uses a stable payment identifier and attempt ID. The
+funding provider atomically creates or reloads one signed artifact for that
+attempt and intent hash, returning the same bytes for identical calls and
+rejecting changed terms before another signature. The client persists the
+artifact and all consumed input outpoints before disclosing the payment.
+
+Merchant `PAYMENT-RESPONSE` metadata is acknowledgement only. Missing,
+malformed, negative, or transport-failed responses leave the attempt pending.
+`reconcileExactPayment(attemptId)` requires trusted transaction evidence plus
+the accepted output and configured confirmation depth. Unknown acceptance
+blocks replacement; only permanent-absence evidence bound to the persisted
+transaction or one of its inputs permits a new logical payment. Provider input
+reservations are finalized idempotently only after either confirmed acceptance
+or proven absence.
+
 ## Durable Funding Transitions
 
 Genesis and top-up are prepare-then-broadcast transitions. The funding provider
 must implement `prepareEscrowDeposit` and `prepareEscrowTopUp` without sending:
 each method returns the exact signed transaction byte hex, its deterministic
-transaction id, and the intended singleton covenant successor.
+transaction id, every consumed input outpoint, and the intended singleton
+covenant successor. Conflict-based absence evidence releases the reservation
+only when it names one of those persisted signed inputs.
 
 Before `sendTransaction`, the client durably reserves that artifact through
 `ChannelStore.claimFundingTransitionAttempt`. A genesis attempt is keyed by its
@@ -84,6 +124,14 @@ trusted `RefundReconciler`. An `unknown` result remains unresolved, while an
 `accepted` or `confirmed` result atomically applies the refund. A mismatched
 transaction id or stale channel head fails closed. Reconciliation of an already
 applied attempt is idempotent.
+
+The reference Testnet-10 profile requires 30 confirmations proven by an
+authoritative selected-chain traversal. Accepting-block and checkpoint blue
+scores bind the evidence but are not a substitute for selected-chain depth.
+`unknown` or pruned continuity blocks reuse. Reconciliation processes removed
+blocks before additions; if a confirmed refund is removed, the applied attempt
+and terminal status roll back atomically to `refundable`, never `active`, before
+a newly built refund is allowed.
 
 `MemoryChannelStore` demonstrates both transition contracts for tests and
 examples. A live deployment needs a durable `ChannelStore` implementation and
