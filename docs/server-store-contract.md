@@ -5,8 +5,7 @@ servers need a durable implementation of `ServerStateStore` with the semantics
 below.
 
 v1 RC1 supports `kaspa-escrow-v3` / `kaspa-x402-escrow-v4` as the active
-batch profile. Older alpha stores are not migrated or read by the v1 RC1
-runtime; immutable release snapshots remain historical records only.
+batch profile. Pre-RC stores are not migrated or read by the v1 RC1 runtime.
 
 ## Required Guarantees
 

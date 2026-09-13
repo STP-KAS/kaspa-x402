@@ -12,10 +12,6 @@ The deployed v1 RC1 gateway uses `kaspa-exact-v2` with the default
 `additive` exact profile is implemented but is advertised only when a current
 KIP-10 head is available.
 
-Historical gateway evidence remains available in the immutable
-[release snapshots](/releases/). This page separates the current v1 RC1
-deployment from historical evidence.
-
 ## Base URL
 
 ```text
@@ -56,7 +52,7 @@ The current gateway deployment is Worker version
 
 - `/health` reports enabled v1 RC1 `standard-native` exact settlement with PNN
   broadcasting;
-- the scheduled canary passes the TN10 REST, immutable snapshot, schema, docs,
+- the scheduled canary passes the TN10 REST, current release metadata, schema, docs,
   exact-offer, batch-offer, and unsupported-scheme checks;
 - funded exact transaction
   `a502fc42046dd18b8ac7712e9b13ebe90f70c9d5094a86a73c4300e625943575`
@@ -92,12 +88,9 @@ The operator command was
 requires an isolated funded Testnet wallet and the live-run environment
 described in [Live Testnet Proof](live-testnet-proof.md).
 
-The immutable [Live Testnet Report](live-testnet-report.md) records an earlier
-run against runtime commit `8284780efd055d22d0685f790df3a26bc2c2e85a`; it is
-historical evidence, not proof of the final tagged source. It remains unchanged
-to preserve the released snapshot. The final raw report and signing material
-remain in the operator's ignored local evidence directory; the record above is
-the sanitized public evidence for the exact tagged-source run.
+The final raw report and signing material remain in the operator's ignored
+local evidence directory; the record above is the sanitized public evidence
+for the exact tagged-source run.
 
 This is bounded Testnet evidence, not a production or mainnet-readiness claim.
 
@@ -219,33 +212,6 @@ exposes `PAYMENT-REQUIRED` and `PAYMENT-RESPONSE`. Paid retries may send
 `PAYMENT-SIGNATURE` is bearer settlement evidence for this trust domain. Send
 it only over TLS to the intended gateway and do not publish or log unused
 payment headers or transaction material.
-
-## Historical Alpha.10 Evidence
-
-The 2026-08-10 Alpha.10 deployment completed funded exact and batch runs:
-
-- Worker version `c57eb755-e169-4a00-ac4a-5e035371cad1`, built from commit
-  `78f2ada` and using Alpha.10 state;
-- `/supported` advertised `kaspa-exact-v2` and `kaspa-escrow-v2`;
-- unpaid `/exact` returned a valid `20000000` sompi offer without inventory;
-- transaction id
-  `8876bcd3a97592d6f5a2583c60994b1f5425067a3db23077851d47fe91bb2ffb`;
-- paid request returned HTTP `200` at accepted finality;
-- identical retry returned the same settlement;
-- cross-resource reuse returned HTTP `409` with
-  `invalid_transaction_state`;
-- batch channel
-  `4920563a8f4ff59bd8fc6422f0e939a639e234f4117c4abbfabeda3ad5b07afb`
-  opened with a deposit-voucher on stable covenant ID
-  `e83c52704998c7a72b24e93dad918ba16d9554ffb605ed8d29fb3276b1e1dcee`;
-- voucher-only reuse returned HTTP `200` on the same channel and covenant ID;
-- replaying the stale deposit voucher returned corrective HTTP `402`; and
-- the scheduled canary passed TN10 REST, release-snapshot, schema, docs, offer,
-  and unsupported-scheme checks.
-
-This evidence predates the v1 RC1 alias controls, fresh
-`demo-gateway-v1.0.0-rc.1` state, and `kaspa-x402-escrow-v4` template. It must not
-be used as v1 RC1 deployment or funded-canary proof.
 
 ## Testnet Funding
 

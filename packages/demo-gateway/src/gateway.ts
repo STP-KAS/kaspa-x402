@@ -407,21 +407,21 @@ export async function runGatewayCanary(
     }),
   );
   checks.push(
-    await checked("release-snapshot", async () => {
+    await checked("current-release", async () => {
       const response = await fetchWithTimeout(
-        `${config.siteBaseUrl}/v${config.releaseVersion}/release.json?canary=${Date.now()}`,
+        `${config.siteBaseUrl}/release.json?canary=${Date.now()}`,
       );
       if (!response.ok)
-        throw new Error(`release snapshot returned ${response.status}`);
+        throw new Error(`release metadata returned ${response.status}`);
       const release = await readJsonWithLimit<{ version?: unknown }>(
         response,
         MAX_CANARY_JSON_BYTES,
-        "release snapshot",
+        "release metadata",
       );
       if (release.version !== config.releaseVersion)
-        throw new Error("release snapshot version mismatch");
+        throw new Error("release metadata version mismatch");
       return {
-        detail: `immutable ${config.releaseVersion} release snapshot resolved`,
+        detail: `current ${config.releaseVersion} release metadata resolved`,
         evidence: { status: response.status },
       };
     }),

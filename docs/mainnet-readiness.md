@@ -10,10 +10,9 @@ The active v1 RC1 native profiles are:
 - `batch-settlement` with `kaspa-escrow-v3` and
   `kaspa-x402-escrow-v4`.
 
-`kaspa:testnet-10` is the only validation target. Older alpha releases remain
-available as immutable historical snapshots, but v1 RC1 does not provide
-runtime compatibility or state migration for them. Mainnet must remain opt-in
-and disabled by default until every gate below is closed.
+`kaspa:testnet-10` is the only validation target. v1 RC1 does not provide
+compatibility or state migration for pre-RC runtimes. Mainnet must remain
+opt-in and disabled by default until every gate below is closed.
 
 ## Required Gates
 

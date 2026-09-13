@@ -1,8 +1,6 @@
 export const SITE_BASE_URL = "https://kaspa-x402.org";
 export const SITE_DIST = "site/dist";
 export const SITE_SRC = "site/src";
-export const RELEASE_LOCK_DIR = "site/releases";
-export const RELEASE_SNAPSHOT_DIR = "site/releases/snapshots";
 
 export const VENDORED_KASPA_WASM = {
   package: "kaspa-wasm",
@@ -90,52 +88,19 @@ export const CONTRACT_FILES = [
   "contracts/fixtures/kaspa-x402-escrow-v4.json",
 ];
 
-export const RELEASE_DOC_FILES = [
-  "docs/public-proposal.md",
+export const PUBLIC_DOC_FILES = [
   "docs/adoption-examples.md",
+  "docs/testnet-gateway.md",
+  "docs/demo-operations.md",
+  "docs/demo-implementer-guide.md",
   "docs/live-testnet-report.md",
   "docs/live-testnet-proof.md",
-  "docs/review-closure-ledger.md",
   "docs/security-threat-model.md",
   "docs/mainnet-readiness.md",
   "docs/versioning-policy.md",
   "docs/native-profile-boundary.md",
   "docs/server-store-contract.md",
   "docs/server-runtime-lock-contract.md",
-];
-
-export const PUBLIC_DOC_FILES = [
-  "docs/adoption-examples.md",
-  "docs/testnet-gateway.md",
-  "docs/demo-operations.md",
-  "docs/demo-implementer-guide.md",
-  ...RELEASE_DOC_FILES.slice(2),
-];
-
-// Compatibility aliases keep previously published unversioned URLs useful
-// without presenting historical or internal evidence as current guidance.
-export const ACTIVE_REDIRECTS = [
-  {
-    from: "/spec/live-covenant-proof-harness/",
-    to: "/docs/live-testnet-proof/",
-    status: 302,
-  },
-  {
-    from: "/spec/transaction-v1-plan/",
-    to: "/spec/kaspa-batch-settlement-v3/",
-    status: 302,
-  },
-  {
-    from: "/spec/kaspa-batch-settlement-v2/",
-    to: "/spec/kaspa-batch-settlement-v3/",
-    status: 302,
-  },
-  { from: "/docs/public-proposal/", to: "/", status: 302 },
-  {
-    from: "/docs/demo-interop-checklist/",
-    to: "/docs/demo-implementer-guide/",
-    status: 302,
-  },
 ];
 
 // One-line purpose for each published artifact, shown next to it in index pages.
@@ -174,12 +139,6 @@ export const ARTIFACT_NOTES = {
     "Normative SilverScript source for the v1 RC1 stateful batch escrow covenant.",
   "contracts/fixtures/kaspa-x402-escrow-v4.json":
     "Language-neutral constructor layout, compiled bytes, script public keys, covenant arguments, and voucher digest fixture.",
-  "spec/live-covenant-proof-harness.md":
-    "Opt-in Testnet-10 proof for singleton genesis, repeated claims, top-up, refund, and restart recovery.",
-  "spec/transaction-v1-plan.md":
-    "Transaction-builder requirements and vector coverage for the complete batch lane lifecycle.",
-  "docs/public-proposal.md":
-    "Ecosystem-facing proposal: what is proposed to the x402 and Kaspa communities, and why.",
   "docs/adoption-examples.md":
     "How existing x402 servers, clients, and facilitators would adopt the Kaspa profiles.",
   "docs/testnet-gateway.md":
@@ -188,14 +147,10 @@ export const ARTIFACT_NOTES = {
     "Operator runbook for the hosted testnet gateway: deploy, rollback, disable, canary, state, and incident notes.",
   "docs/demo-implementer-guide.md":
     "Third-party implementer guide for schemas, vectors, exact and batch gateway calls, and error handling.",
-  "docs/demo-interop-checklist.md":
-    "External-style checklist for whether the public demo surface is usable without repository context.",
   "docs/live-testnet-report.md":
     "Live `kaspa:testnet-10` run: executed flows, transaction ids, and observed behavior.",
   "docs/live-testnet-proof.md":
     "How exact and full v1 RC1 batch-lifecycle proof artifacts are produced and independently validated.",
-  "docs/review-closure-ledger.md":
-    "External review findings and how each one was resolved.",
   "docs/security-threat-model.md":
     "Threat model: trust boundaries, attacker capabilities, and mitigations.",
   "docs/mainnet-readiness.md":
@@ -230,7 +185,6 @@ export const DOC_GROUPS = [
     files: [
       "docs/live-testnet-report.md",
       "docs/live-testnet-proof.md",
-      "docs/review-closure-ledger.md",
     ],
   },
   {
@@ -274,11 +228,6 @@ export const PRIVATE_SITE_PATTERNS = [
   /^docs\/.*-review\.md$/,
   /^docs\/release-publish\.md$/,
   /^docs\/site-architecture\.md$/,
-  /^docs\/demo-announcement-draft\.md$/,
-  /^docs\/x402-submission-draft\.md$/,
-  /^docs\/caip-namespace-draft\.md$/,
-  /^docs\/x402-v2-compat-report\.md$/,
-  /^docs\/kaspa-community-post-draft\.md$/,
   /^\.kaspa-x402-live\//,
   /^\.kaspa-x402-consensus-target\//,
   /^node_modules\//,
