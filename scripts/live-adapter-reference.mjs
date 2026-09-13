@@ -2668,7 +2668,6 @@ async function buildPreparedGenesis(input) {
       fundingPrivateKey: new sdk.PrivateKey(fundingPrivateKeyHex),
       fundingAddress,
       spentOutpoints,
-      entries: [funding.raw],
       outputs: [{ address: fundingAddress, amount: requiredInputAmount }],
     });
     funding = await waitForAddressOutpoint({
