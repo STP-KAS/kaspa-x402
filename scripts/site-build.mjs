@@ -162,14 +162,14 @@ function writeHomePage() {
 
     <h2 id="status">Status</h2>
     <ul>
-      <li>Alpha reference: draft specs, JSON schemas, conformance vectors, and TypeScript packages under prerelease npm tags.</li>
+      <li>v1 release candidate: draft specs, JSON schemas, conformance vectors, and TypeScript packages under the <code>rc</code> npm tag.</li>
       <li>Network target: <code>kaspa:testnet-10</code> only.</li>
-      <li>Hosted gateway: <a href="https://demo.kaspa-x402.org"><code>demo.kaspa-x402.org</code></a> is the Testnet-10 integration endpoint. The unversioned site describes the ${escapeHtml(releaseVersion)} candidate source; Alpha.11 funded deployment proof is pending, and the <a href="/docs/testnet-gateway/">gateway reference</a> separates it from historical Alpha.10 evidence.</li>
+      <li>Hosted gateway: <a href="https://demo.kaspa-x402.org"><code>demo.kaspa-x402.org</code></a> is the Testnet-10 integration endpoint. The unversioned site describes the ${escapeHtml(releaseVersion)} candidate source; v1 RC1 funded deployment proof is pending, and the <a href="/docs/testnet-gateway/">gateway reference</a> separates it from historical Alpha.10 evidence.</li>
       <li>Mainnet: blocked. <code>kaspa:mainnet</code> is a reserved profile name; the blocking gates are listed in <a href="/docs/mainnet-readiness/">mainnet readiness</a>. Do not use any of this with production funds.</li>
       <li>Standards: the <code>kaspa:*</code> network identifiers are draft binding names, not accepted x402 registry or CAIP entries.</li>
-      <li>Stability: package names, schemas, and field names may change until the first tagged spec release. See the <a href="/docs/versioning-policy/">versioning policy</a>.</li>
+      <li>Stability: package names, schemas, and field names may change before stable <code>1.0.0</code>. See the <a href="/docs/versioning-policy/">versioning policy</a>.</li>
     </ul>
-    <p class="muted">Generated from commit <code>${escapeHtml(commit.slice(0, 12))}</code> (${escapeHtml(commitDate.slice(0, 10))}). Unversioned routes track the active alpha; immutable snapshots are listed under <a href="/releases/">releases</a>.</p>
+    <p class="muted">Generated from commit <code>${escapeHtml(commit.slice(0, 12))}</code> (${escapeHtml(commitDate.slice(0, 10))}). Unversioned routes track the active prerelease; immutable snapshots are listed under <a href="/releases/">releases</a>.</p>
 
     <h2>What is x402</h2>
     <p>x402 is an open protocol that turns the HTTP <code>402 Payment Required</code> status code into a machine-payable flow: a server answers an unpaid request with a 402 carrying a machine-readable offer, the client retries with a signed payment payload, and the server verifies the payment, settles it, and serves the response. The same primitives work over HTTP headers and MCP <code>_meta</code> fields, so paid APIs and tools are usable by autonomous agents. See <a href="https://www.x402.org">x402.org</a>.</p>
@@ -201,7 +201,7 @@ function writeHomePage() {
     </ul>
 
     <h2 id="packages">Packages</h2>
-    <p>Install with an explicit prerelease tag or exact version; <code>latest</code> dist-tags are not the recommended alpha install path.</p>
+    <p>Install with <code>@rc</code> or the exact version; <code>latest</code> remains on the previous alpha until stable <code>1.0.0</code>.</p>
     <pre><code>npm install ${escapeHtml(releaseNpmInstall().join(" "))}</code></pre>
     ${packagesTable()}
     <p class="muted">Machine-readable: <a href="/packages.json"><code>packages.json</code></a>, <a href="/site-manifest.json"><code>site-manifest.json</code></a>.</p>
@@ -368,8 +368,8 @@ function writeReleasesPage() {
       `
   <main>
     <h1>Releases</h1>
-    <p>Immutable snapshots of the published surface, one per release. Unversioned routes track the active alpha; snapshot content is hash-locked.</p>
-    <p>Install alpha packages with an explicit prerelease tag or exact version; <code>latest</code> dist-tags are not the recommended alpha install path.</p>
+    <p>Immutable snapshots of the published surface, one per release. Unversioned routes track the active prerelease; snapshot content is hash-locked.</p>
+    <p>Install the release candidate with <code>@rc</code> or its exact version; <code>latest</code> is reserved for stable <code>1.0.0</code>.</p>
     <div class="table-wrap"><table>
       <thead><tr><th>Version</th><th>Snapshot</th><th>Metadata</th><th>Lock</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -388,7 +388,7 @@ function writeNotFoundPage() {
       `
   <main>
     <h1>Not Found</h1>
-    <p>The requested page is not published on this site. Use <a href="/releases/">releases</a> for immutable snapshots or return to the <a href="/">current alpha reference</a>.</p>
+    <p>The requested page is not published on this site. Use <a href="/releases/">releases</a> for immutable snapshots or return to the <a href="/">current prerelease reference</a>.</p>
   </main>
       `,
     ),
@@ -403,7 +403,7 @@ function writeDemoPage() {
       `
   <main>
     <h1>Browser Test Client</h1>
-    <p class="muted">Testnet-only browser client for inspecting Kaspa x402 offers, checking public-node connectivity, and rehearsing exact or Alpha.11 batch payment headers. The hosted gateway at <a href="https://demo.kaspa-x402.org"><code>demo.kaspa-x402.org</code></a> is the Testnet-10 integration endpoint; Alpha.11 funded deployment proof is pending. See the <a href="/docs/testnet-gateway/">gateway reference</a> for the candidate boundary and historical Alpha.10 evidence.</p>
+    <p class="muted">Testnet-only browser client for inspecting Kaspa x402 offers, checking public-node connectivity, and rehearsing exact or v1 RC1 batch payment headers. The hosted gateway at <a href="https://demo.kaspa-x402.org"><code>demo.kaspa-x402.org</code></a> is the Testnet-10 integration endpoint; v1 RC1 funded deployment proof is pending. See the <a href="/docs/testnet-gateway/">gateway reference</a> for the candidate boundary and historical Alpha.10 evidence.</p>
 
     <section class="demo-panel" aria-labelledby="demo-safety">
       <h2 id="demo-safety">Safety Boundary</h2>
@@ -481,7 +481,7 @@ function writeDemoPage() {
       <label for="demo-pay-to">Pay-to address</label>
       <input id="demo-pay-to" type="text" spellcheck="false" placeholder="kaspatest:...">
       <div id="demo-batch-fields" hidden>
-        <h3>Alpha.11 Batch Requirements</h3>
+        <h3>v1 RC1 Batch Requirements</h3>
         <label for="demo-server-public-key">Server public key</label>
         <input id="demo-server-public-key" type="text" spellcheck="false" value="22222222222222222222222222222222222222222222222222222222222222bb">
         <label for="demo-min-deposit">Minimum deposit (sompi)</label>
@@ -613,7 +613,7 @@ function writePnnSpikeJson() {
         "sdk initialization",
         "throwaway testnet key generation",
         "exact header generation",
-        "Alpha.11 batch voucher header generation",
+        "v1 RC1 batch voucher header generation",
         "batch A/S/T/V/R invariant checks",
         "batch partial-claim successor preview",
         "mixed-offer narrowing",
@@ -629,7 +629,7 @@ function writePnnSpikeJson() {
     },
     worker: {
       status:
-        "Alpha.11 candidate source for https://demo.kaspa-x402.org; funded cutover proof is pending and the recorded funded evidence is Alpha.10",
+        "v1 RC1 candidate source for https://demo.kaspa-x402.org; funded cutover proof is pending and the recorded funded evidence is Alpha.10",
       verifiedCapabilities: [
         "REST chain health",
         "Durable Object state",
@@ -661,7 +661,7 @@ function writePnnSpikeJson() {
 }
 
 function statusLine() {
-  return `<p class="muted">Status: draft alpha targeting <code>kaspa:testnet-10</code>. Mainnet use remains blocked by the documented readiness gates.</p>`;
+  return `<p class="muted">Status: v1 release candidate targeting <code>kaspa:testnet-10</code>. Mainnet use remains blocked by the documented readiness gates.</p>`;
 }
 
 function annotatedRow(href, label, note, sha256) {
@@ -823,7 +823,7 @@ function releaseMetadata(releaseLock, releaseArtifacts, releaseProvenance) {
     snapshotScope: releaseSnapshotScope,
     activeAlphaOnlyRoutes,
     unversionedRoutes:
-      "active alpha; not part of the immutable release snapshot",
+      "active prerelease; not part of the immutable release snapshot",
     npmInstall: releaseNpmInstall(),
     artifacts: releaseArtifacts,
   };
@@ -835,9 +835,9 @@ function releaseIndexHtml(releaseArtifacts) {
     `
       <main>
         <h1>Release ${escapeHtml(releaseVersion)}</h1>
-        <p>Status: locked alpha snapshot for this version. Machine-readable metadata is available at <a href="/${releasePath}/release.json"><code>/${releasePath}/release.json</code></a>.</p>
-        <p>This snapshot locks ${escapeHtml(releaseSnapshotScope)}. The browser test client, shared site assets, vendored browser SDK files, and package index route remain active-alpha routes.</p>
-        <p>Stable consumers should pin a versioned path once a stable release exists.</p>
+        <p>Status: locked prerelease snapshot for this version. Machine-readable metadata is available at <a href="/${releasePath}/release.json"><code>/${releasePath}/release.json</code></a>.</p>
+        <p>This snapshot locks ${escapeHtml(releaseSnapshotScope)}. The browser test client, shared site assets, vendored browser SDK files, and package index route remain mutable prerelease routes.</p>
+        <p>Release-candidate consumers should pin this versioned path.</p>
         ${artifactTable(releaseArtifacts)}
       </main>
     `,
@@ -965,7 +965,7 @@ ${options.head ?? ""}
     </nav>
   </header>
   ${body}
-  <footer>Alpha standards reference for the Kaspa x402 binding. This domain does not host a custodial wallet, hosted signer, facilitator, or payment API.</footer>
+  <footer>Prerelease standards reference for the Kaspa x402 binding. This domain does not host a custodial wallet, hosted signer, facilitator, or payment API.</footer>
 </body>
 </html>`;
 }
@@ -995,7 +995,7 @@ function snapshotLayout(title, body) {
     </nav>
   </header>
 ${content}
-  <footer>Alpha standards reference for the Kaspa x402 binding. This domain does not host a wallet, signer, facilitator, or payment API.</footer>
+  <footer>Prerelease standards reference for the Kaspa x402 binding. This domain does not host a wallet, signer, facilitator, or payment API.</footer>
 </body>
 </html>`;
 }

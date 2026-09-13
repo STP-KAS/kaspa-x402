@@ -2,7 +2,7 @@
 
 Transport-neutral types, codecs, canonical encoders, scheme selection, channel IDs, voucher digest helpers, MCP transport primitives, and facilitator wire types.
 
-Status: alpha. This package is part of a testnet-oriented reference
+Status: release candidate. This package is part of a testnet-oriented reference
 implementation and does not imply mainnet readiness.
 
 This package contains deterministic Kaspa x402 protocol primitives only. It does not talk to wallets, RPC nodes, facilitators, HTTP servers, MCP servers, or the filesystem.

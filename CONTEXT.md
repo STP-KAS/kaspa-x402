@@ -7,7 +7,7 @@ Historical release snapshots retain the language of the release they record.
 
 A payment for one request whose price is known before protected work begins. An
 exact payment transfers precisely the advertised native-KAS amount to the
-merchant. The active alpha supports two exact profiles.
+merchant. The active release candidate supports two exact profiles.
 
 ## Standard-native exact
 
@@ -67,7 +67,7 @@ current outpoint separately.
 
 The current outpoint, remaining funding, committed-charge lifetime total, settled
 lifetime total, and latest buyer-signed lifetime ceiling for one batch covenant
-identity. Alpha.11 replaces the earlier active batch state outright; runtimes do
+identity. v1 RC1 replaces the earlier active batch state outright; runtimes do
 not import or interpret older-alpha channel state. Historical tagged releases
 remain unchanged.
 

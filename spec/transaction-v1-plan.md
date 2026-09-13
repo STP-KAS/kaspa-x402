@@ -1,6 +1,6 @@
 # Batch Transaction V1 Reference
 
-Status: Alpha.11, Testnet-10 only
+Status: v1 RC1, Testnet-10 only
 
 The normative rules live in
 [`kaspa-batch-settlement-v3.md`](kaspa-batch-settlement-v3.md). This document is

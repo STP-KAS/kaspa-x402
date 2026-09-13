@@ -2,7 +2,7 @@
 
 Covenant helpers for the Kaspa x402 `batch-settlement` binding.
 
-Status: alpha. The current artifacts support testnet review and deterministic
+Status: release candidate. The current artifacts support testnet review and deterministic
 fixture checks; they are not audited for production mainnet funds.
 
 This package builds deterministic redeem scripts, signature-script argument

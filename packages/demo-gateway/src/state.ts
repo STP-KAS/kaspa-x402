@@ -133,7 +133,7 @@ const MAX_DURABLE_RESPONSE_BYTES =
   MAX_DURABLE_HANDLER_RESULT_BYTES +
   KASPA_X402_RESOURCE_BUDGET.maxEncodedHeaderBytes +
   1024;
-export const GATEWAY_COORDINATION_DOMAIN = "demo-gateway-state:alpha.11";
+export const GATEWAY_COORDINATION_DOMAIN = "demo-gateway-state:v1.0.0-rc.1";
 const DEFAULT_DURABLE_STATE_LIMITS: GatewayDurableStateLimits = {
   maxRecords: 10_000,
   maxBytes: 512 * 1024 * 1024,
@@ -2596,7 +2596,7 @@ async function pruneTerminalDurableBudgets(
   limits: GatewayDurableStateLimits,
   now: number,
 ): Promise<void> {
-  // Alpha.11 briefly retained compact tombstones in active quota metadata.
+  // v1 RC1 briefly retained compact tombstones in active quota metadata.
   // Reclaim those legacy reservations lazily while leaving the compact
   // payment/commitment records themselves intact for replay rejection.
   if (!(await txn.get<boolean>(durableBudgetQuotaMigrationKey()))) {

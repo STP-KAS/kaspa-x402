@@ -171,7 +171,7 @@ export const ARTIFACT_NOTES = {
   "spec/errors.md":
     "Error reasons: public x402 error codes and mapping rules for Kaspa-local diagnostics.",
   "contracts/kaspa-x402-escrow-v4.sil":
-    "Normative SilverScript source for the Alpha.11 stateful batch escrow covenant.",
+    "Normative SilverScript source for the v1 RC1 stateful batch escrow covenant.",
   "contracts/fixtures/kaspa-x402-escrow-v4.json":
     "Language-neutral constructor layout, compiled bytes, script public keys, covenant arguments, and voucher digest fixture.",
   "spec/live-covenant-proof-harness.md":
@@ -193,7 +193,7 @@ export const ARTIFACT_NOTES = {
   "docs/live-testnet-report.md":
     "Live `kaspa:testnet-10` run: executed flows, transaction ids, and observed behavior.",
   "docs/live-testnet-proof.md":
-    "How exact and full Alpha.11 batch-lifecycle proof artifacts are produced and independently validated.",
+    "How exact and full v1 RC1 batch-lifecycle proof artifacts are produced and independently validated.",
   "docs/review-closure-ledger.md":
     "External review findings and how each one was resolved.",
   "docs/security-threat-model.md":
@@ -272,7 +272,7 @@ export const PRIVATE_SITE_PATTERNS = [
   /^docs\/standard-plan\.md$/,
   /^finding\.md$/,
   /^docs\/.*-review\.md$/,
-  /^docs\/alpha-publish\.md$/,
+  /^docs\/release-publish\.md$/,
   /^docs\/site-architecture\.md$/,
   /^docs\/demo-announcement-draft\.md$/,
   /^docs\/x402-submission-draft\.md$/,

@@ -10,11 +10,11 @@ against the Kaspa network.
   https://demo.kaspa-x402.org
 - Browser test client: https://kaspa-x402.org/demo/
 
-Status: alpha. Everything targets `kaspa:testnet-10`. Mainnet use is blocked
+Status: v1 release candidate. Everything targets `kaspa:testnet-10`. Mainnet use is blocked
 by the gates in [docs/mainnet-readiness.md](docs/mainnet-readiness.md), and
 reference runtimes require explicit `allowMainnet` opt-in. Package names,
-schemas, and field names may change until the first tagged spec release.
-Alpha.11 is a clean replacement of the earlier batch binding: active runtimes
+schemas, and field names may change before the stable `1.0.0` release.
+v1 RC1 is a clean replacement of the earlier batch binding: active runtimes
 do not read or migrate older-alpha channel state. Tagged alpha releases remain
 immutable historical snapshots.
 
@@ -124,7 +124,7 @@ adapters. Live Testnet-10 proof is fail-closed and adapter-driven; see
 
 ## Packages
 
-Published alpha packages (install with an explicit prerelease tag):
+Public release-candidate packages (install with `@rc` or the exact version):
 
 ```text
 @kaspa-x402/core

@@ -1,7 +1,7 @@
 # Demo Interoperability Checklist
 
 Status: external-style readiness checklist for the public alpha demo surface.
-Alpha.11 candidate reviewed on 2026-08-27. Hosted Alpha.10 evidence last
+v1 RC1 candidate reviewed on 2026-08-27. Hosted Alpha.10 evidence last
 reviewed on 2026-08-10.
 
 This checklist is written from the perspective of an implementer arriving at
@@ -14,8 +14,8 @@ the site without repository context.
 | Can a reader find the canonical schemas?                  | Yes. `/schemas/` lists every schema with a purpose note and hash.                                                                                                                                                                          |
 | Can a reader find the supported schemes and networks?     | Yes. The homepage, specs, and gateway docs state `exact`, `batch-settlement`, `kaspa:testnet-10`, and `KAS`.                                                                                                                               |
 | Can a reader run fixture validation?                      | Yes. `/vectors/` groups fixtures by directory and `npm run validate:schemas` validates committed fixtures locally.                                                                                                                         |
-| Can a reader hit a real endpoint?                         | Yes. `https://demo.kaspa-x402.org` exposes `/health`, `/canary`, `/supported`, `/exact`, and `/batch` from the paid-canary-proven Alpha.10 Worker. Alpha.11 deployment proof is pending.                                                    |
-| Does the endpoint advertise current payable terms?        | Yes, for Alpha.10. The Alpha.11 candidate uses `kaspa-escrow-v3` with `kaspa-x402-escrow-v4`, but implementers must not treat the public endpoint as Alpha.11 until its cutover is recorded.                                                |
+| Can a reader hit a real endpoint?                         | Yes. `https://demo.kaspa-x402.org` exposes `/health`, `/canary`, `/supported`, `/exact`, and `/batch` from the paid-canary-proven Alpha.10 Worker. v1 RC1 deployment proof is pending.                                                    |
+| Does the endpoint advertise current payable terms?        | Yes, for Alpha.10. The v1 RC1 candidate uses `kaspa-escrow-v3` with `kaspa-x402-escrow-v4`, but implementers must not treat the public endpoint as v1 RC1 until its cutover is recorded.                                                |
 | Does the endpoint publish operational status?             | Yes. `/health` is a shallow, non-amplifying liveness check; `/metrics` exposes counters and `/canary` exposes the stored upstream/release checks after the scheduled job has run. |
 | Does the public material imply mainnet readiness?         | No. The site and gateway docs frame the deployment as alpha and `kaspa:testnet-10` only.                                                                                                                                                   |
 | Does the site publish internal planning or review drafts? | No. The site checker blocks ignored planning files, review files, and private announcement drafts.                                                                                                                                         |
@@ -49,7 +49,7 @@ Recommended external manual checks:
 
 ## Acceptance Verdict
 
-The Alpha.11 candidate schemas and vectors are suitable for local alpha review.
-The paid-canary-proven hosted deployment remains Alpha.10 and is not Alpha.11
+The v1 RC1 candidate schemas and vectors are suitable for local alpha review.
+The paid-canary-proven hosted deployment remains Alpha.10 and is not v1 RC1
 interoperability evidence. Neither surface is suitable for mainnet funds,
 production use, or unreviewed third-party custody patterns.

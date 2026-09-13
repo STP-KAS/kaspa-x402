@@ -88,7 +88,7 @@ async function smokeGateway(baseUrl) {
     "canary endpoint failed",
   );
   assert(
-    health.body.releaseVersion === "0.1.0-alpha.11",
+    health.body.releaseVersion === "1.0.0-rc.1",
     `unexpected release ${health.body.releaseVersion}`,
   );
   assert(
@@ -114,7 +114,7 @@ async function smokeGateway(baseUrl) {
   );
   assert(
     batchRequired.accepts[0]?.extra?.binding === ESCROW_BINDING_ID,
-    "batch offer did not advertise the Alpha.11 escrow binding",
+    "batch offer did not advertise the v1 RC1 escrow binding",
   );
   assert(
     batchRequired.accepts[0]?.extra?.templateId === ESCROW_TEMPLATE_ID,
@@ -122,7 +122,7 @@ async function smokeGateway(baseUrl) {
   );
   assert(
     batchRequired.accepts[0]?.extra?.claimReserveSompi === "10000000",
-    "batch offer did not advertise the Alpha.11 claim reserve",
+    "batch offer did not advertise the v1 RC1 claim reserve",
   );
   assert(
     unsupported.status === 402 &&
@@ -144,7 +144,7 @@ async function smokeGateway(baseUrl) {
   assert(
     supportedBatch?.extra?.binding === ESCROW_BINDING_ID &&
       supportedBatch?.extra?.templateId === ESCROW_TEMPLATE_ID,
-    "supported endpoint did not expose the Alpha.11 KIP-20 batch kind",
+    "supported endpoint did not expose the v1 RC1 KIP-20 batch kind",
   );
 
   return {

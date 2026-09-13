@@ -1,6 +1,6 @@
 # Demo Gateway Operations
 
-Status: alpha operations runbook for the hosted `kaspa:testnet-10` gateway.
+Status: release-candidate operations runbook for the hosted `kaspa:testnet-10` gateway.
 This runbook describes the public demo service at:
 
 ```text
@@ -9,8 +9,8 @@ https://demo.kaspa-x402.org
 
 Last repository-backed funded deployment evidence: Alpha.10 Worker version
 `c57eb755-e169-4a00-ac4a-5e035371cad1`, built from commit `78f2ada`. That
-historical evidence does not validate the Alpha.11 source, fresh durable state,
-or `kaspa-x402-escrow-v4`. Alpha.11 deployment and funded canary proof are
+historical evidence does not validate the v1 RC1 source, fresh durable state,
+or `kaspa-x402-escrow-v4`. v1 RC1 deployment and funded canary proof are
 pending.
 
 The gateway is an integration target, not a wallet, custodian, faucet,
@@ -30,14 +30,14 @@ Important non-secret variables:
 | `KASPA_X402_SERVER_PUBLIC_KEY`               | Testnet server public key advertised in batch escrow terms.                                                                                                    |
 | `KASPA_X402_EXACT_AMOUNT`                    | Exact-payment price in sompi. Must be at least `10000000`.                                                                                                     |
 | `KASPA_X402_EXACT_PROFILE`                   | Exact profile: `standard-native` (default) or optional `additive`.                                                                                             |
-| `KASPA_X402_BATCH_AMOUNT`                    | Fixed per-request Alpha.11 batch charge in sompi.                                                                                                              |
+| `KASPA_X402_BATCH_AMOUNT`                    | Fixed per-request v1 RC1 batch charge in sompi.                                                                                                              |
 | `KASPA_X402_MIN_DEPOSIT_SOMPI`               | Batch escrow deposit floor. Must be at least `10000000`.                                                                                                       |
-| `KASPA_X402_CLAIM_RESERVE_SOMPI`             | Advertised Alpha.11 minimum successor reserve R. Must be at least `10000000`; the advertised deposit floor must cover the request ceiling plus this reserve.   |
+| `KASPA_X402_CLAIM_RESERVE_SOMPI`             | Advertised v1 RC1 minimum successor reserve R. Must be at least `10000000`; the advertised deposit floor must cover the request ceiling plus this reserve.   |
 | `KASPA_X402_REFUND_TIMEOUT_DAA_DELTA`        | Maximum DAA horizon for the persisted absolute batch timeout. The Worker rolls the timeout only at the minimum-lead boundary.                                  |
 | `KASPA_X402_MINIMUM_REFUND_LEAD_DAA`         | Minimum remaining DAA lead required before accepting a batch payment.                                                                                          |
 | `KASPA_X402_GLOBAL_CONCURRENCY`              | Deployment-wide cap for in-flight protected requests. Enforced by renewable leases in the gateway Durable Object; default `64`, maximum `256`.                 |
 | `KASPA_X402_SITE_BASE_URL`                   | Standards site base URL used by canary checks.                                                                                                                 |
-| `KASPA_X402_RELEASE_VERSION`                 | Immutable alpha release snapshot checked by the scheduled canary.                                                                                              |
+| `KASPA_X402_RELEASE_VERSION`                 | Immutable prerelease snapshot checked by the scheduled canary.                                                                                                 |
 | `KASPA_X402_GATEWAY_BASE_URL`                | Gateway base URL used by canary checks.                                                                                                                        |
 | `KASPA_X402_HOSTED_EXACT_SETTLEMENT_ENABLED` | Set to `true` only when the hosted exact verifier, PNN broadcast path, and finality observation are deployed. Additive also requires a durable available head. |
 | `KASPA_X402_CHAIN_BROADCAST_MODE`            | `pnn` for hosted KIP-10 exact submission and authoritative batch selected-chain lineage. REST mode cannot prove batch lineage continuity.                       |
@@ -52,37 +52,37 @@ Secret variables:
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `KASPA_X402_ADMIN_TOKEN` | Bearer token for additive exact-head registration, reconciliation, and stats endpoints. Set with `wrangler secret put`; do not commit it. |
 
-## Alpha.11 Cutover
+## v1 RC1 Cutover
 
-Alpha.11 is a clean-state cutover, not an Alpha.10 Durable Object migration.
+v1 RC1 is a clean-state cutover, not an Alpha.10 Durable Object migration.
 The Worker resolves `GATEWAY_STATE` with the logical object name
-`demo-gateway-alpha.11`; it MUST NOT read, import, or overwrite the Alpha.10
+`demo-gateway-v1.0.0-rc.1`; it MUST NOT read, import, or overwrite the Alpha.10
 object.
 
-1. Create the new Alpha.11 release snapshot and content lock, pass the release
+1. Create the new v1 RC1 release snapshot and content lock, pass the release
    gate from a clean checkout, then deploy the static apex and `www` site first.
-   Verify the Alpha.11 release metadata, schemas, vectors, and docs publicly.
+   Verify the v1 RC1 release metadata, schemas, vectors, and docs publicly.
 2. Disable the Alpha.10 public gateway before replacing its Worker. Keep the
    Alpha.10 deployment and Durable Object untouched for rollback evidence.
-3. Confirm the Worker advertises `0.1.0-alpha.11`, `kaspa-escrow-v3`,
+3. Confirm the Worker advertises `1.0.0-rc.1`, `kaspa-escrow-v3`,
    `kaspa-x402-escrow-v4`, and R, and resolves fresh
-   `demo-gateway-alpha.11` state.
-4. Validate the disabled Alpha.11 Worker, then run funded exact and batch
+   `demo-gateway-v1.0.0-rc.1` state.
+4. Validate the disabled v1 RC1 Worker, then run funded exact and batch
    canaries through an operator-controlled preview. Re-register any verified,
    still-unspent additive heads; exact replay records, payment identifiers, and
    batch channels are intentionally not copied from Alpha.10.
-5. Enable the public Alpha.11 Worker only after its canaries pass. New batch
+5. Enable the public v1 RC1 Worker only after its canaries pass. New batch
    clients must open singleton `kaspa-escrow-v3` binding lanes using the
    `kaspa-x402-escrow-v4` template; no older batch lane continues across the
    cutover.
 
-Pending. Do not mark this cutover complete until the Alpha.11 release snapshot,
-fresh `demo-gateway-alpha.11` state, and funded exact and batch canaries have
+Pending. Do not mark this cutover complete until the v1 RC1 release snapshot,
+fresh `demo-gateway-v1.0.0-rc.1` state, and funded exact and batch canaries have
 been independently recorded.
 
 ## Deploy
 
-Do not deploy the Alpha.11 Worker until the locked Alpha.11 static site is live.
+Do not deploy the v1 RC1 Worker until the locked v1 RC1 static site is live.
 The Worker canary reads `KASPA_X402_RELEASE_VERSION`, so Worker-first deployment
 would fail its release-snapshot check.
 
@@ -182,7 +182,7 @@ Rollback procedure:
    deliberately enabled and tested.
 5. Record the version, reason, and verification result in the operator notes.
 
-Alpha.10 and Alpha.11 use separate logical Durable Objects. A rollback to the
+Alpha.10 and v1 RC1 use separate logical Durable Objects. A rollback to the
 Alpha.10 Worker must continue resolving its Alpha.10 state; never point either
 Worker version at the other release's object.
 
@@ -329,7 +329,7 @@ The hosted gateway uses one SQLite-backed Durable Object. It stores exact
 replay records, payment identifiers, batch channels, settlement commitments,
 locks, rate counters, metrics, and the latest canary report.
 
-Each Alpha.11 batch row also owns its immutable covenant launch manifest,
+Each v1 RC1 batch row also owns its immutable covenant launch manifest,
 append-only accepted/removed lineage journal, durable selected-chain checkpoint,
 and atomically derived current head. Those fields must be committed together.
 
@@ -344,7 +344,7 @@ Policy for the public alpha:
 - production operators should design their own backup and state-partitioning
   policy before using this code outside the hosted demo.
 
-For Alpha.11, `demo-gateway-alpha.11` starts empty by design. This resets exact
+For v1 RC1, `demo-gateway-v1.0.0-rc.1` starts empty by design. This resets exact
 replay and payment-identifier records, additive-head inventory, batch channels,
 settlement commitments, counters, metrics, and canary history. Re-register only
 independently verified, still-unspent additive heads and require every batch

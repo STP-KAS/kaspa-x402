@@ -2,7 +2,7 @@
 
 Client SDK for direct-mode Kaspa x402 payments.
 
-Status: alpha. This package targets testnet iteration and mock/local examples;
+Status: release candidate. This package targets testnet iteration and mock/local examples;
 it is not a production wallet, custody, or mainnet funding system.
 
 The current implementation covers HTTP paid fetch and MCP paid tool calls for `exact` one-shot transfers and `batch-settlement` escrow channels:

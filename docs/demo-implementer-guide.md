@@ -1,15 +1,15 @@
 # Demo Implementer Guide
 
-Status: Alpha.11 release candidate, Testnet-10 only. The hosted gateway is an
+Status: v1 RC1 release candidate, Testnet-10 only. The hosted gateway is an
 integration target, not a production or mainnet service.
 
-This guide describes the Alpha.11 candidate source and planned public-gateway
-cutover. The public registry and gateway remain Alpha.10 until the Alpha.11
+This guide describes the v1 RC1 candidate source and planned public-gateway
+cutover. The public registry and gateway remain Alpha.10 until the v1 RC1
 release and funded canaries are completed.
 
-Alpha.11 uses `kaspa-escrow-v3` / `kaspa-x402-escrow-v4` for batch settlement.
+v1 RC1 uses `kaspa-escrow-v3` / `kaspa-x402-escrow-v4` for batch settlement.
 The exact profiles are unchanged. Older alpha snapshots are historical artifacts
-only; clients must not send their batch payloads to the Alpha.11 runtime.
+only; clients must not send their batch payloads to the v1 RC1 runtime.
 
 ## Start With The Artifacts
 
@@ -27,16 +27,16 @@ Useful entry points:
 - gateway docs: `https://kaspa-x402.org/docs/testnet-gateway/`;
 - gateway base URL: `https://demo.kaspa-x402.org`.
 
-Before publication, use a clean checkout or locally packed Alpha.11 tarballs.
-After Alpha.11 is published, install the exact prerelease explicitly:
+Before publication, use a clean checkout or locally packed v1 RC1 tarballs.
+After v1 RC1 is published, install the exact prerelease explicitly:
 
 ```sh
-npm install @kaspa-x402/core@0.1.0-alpha.11 @kaspa-x402/client@0.1.0-alpha.11
+npm install @kaspa-x402/core@1.0.0-rc.1 @kaspa-x402/client@1.0.0-rc.1
 ```
 
-The registry `latest` and `alpha` tags currently resolve to Alpha.10. Do not use
-them as Alpha.11 inputs until the release sequence records the new package
-hashes and tags. Alpha.11 remains prerelease software and does not imply a
+The registry `latest` and `alpha` tags currently resolve to Alpha.10. After
+publication, use `@rc` or exact version `1.0.0-rc.1`; do not use `latest` as an
+RC input. v1 RC1 remains prerelease software and does not imply a
 stable API, frozen wire format, or mainnet readiness. The hosted gateway package
 is not published.
 
@@ -64,8 +64,8 @@ transaction-specific mass and reserve analysis.
 curl -fsS https://demo.kaspa-x402.org/supported
 ```
 
-Do not submit an Alpha.11 payment until the response advertises the expected
-Alpha.11 release and capability. The public gateway is expected to remain on
+Do not submit a v1 RC1 payment until the response advertises the expected
+v1 RC1 release and capability. The public gateway is expected to remain on
 Alpha.10 until the clean cutover completes:
 
 - `network: "kaspa:testnet-10"`;

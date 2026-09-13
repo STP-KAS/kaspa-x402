@@ -173,7 +173,7 @@ export function readGatewayConfig(env: GatewayEnv): GatewayConfig {
       "KASPA_X402_SITE_BASE_URL",
     ),
     releaseVersion: releaseVersion(
-      env.KASPA_X402_RELEASE_VERSION ?? "0.1.0-alpha.11",
+      env.KASPA_X402_RELEASE_VERSION ?? "1.0.0-rc.1",
     ),
     gatewayBaseUrl: baseUrl(
       env.KASPA_X402_GATEWAY_BASE_URL ?? "https://demo.kaspa-x402.org",
@@ -205,9 +205,9 @@ export function readGatewayConfig(env: GatewayEnv): GatewayConfig {
 
 function releaseVersion(value: string): string {
   const normalized = value.trim();
-  if (!/^0\.1\.0-alpha\.\d+$/.test(normalized)) {
+  if (normalized !== "1.0.0-rc.1") {
     throw new Error(
-      "KASPA_X402_RELEASE_VERSION must be an alpha release version",
+      "KASPA_X402_RELEASE_VERSION must be 1.0.0-rc.1",
     );
   }
   return normalized;

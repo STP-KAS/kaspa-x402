@@ -660,7 +660,7 @@ function runTxV1Proof() {
   const source = fs.readFileSync(path.join(root, fixture.source));
   const fixtureReport = checkEscrowFixtureReproducibility(fixture, source);
   assert.equal(fixture.templateId, "kaspa-x402-escrow-v4");
-  check("Alpha.11 escrow fixture reproducibility", {
+  check("v1 RC1 escrow fixture reproducibility", {
     checks: fixtureReport.checks.length,
     compilerCommit: fixture.compiler?.checkedCommit,
   });
