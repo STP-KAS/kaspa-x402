@@ -1,6 +1,6 @@
 {
   "version": "1.0.0-rc.1",
   "frozen": true,
-  "contentSha256": "1fc6c29f04820686b18b781127fc77f8417fef2b56c7e97f6bc5995750d4ceb7",
+  "contentSha256": "59058d9665d573dbe5d5cb6242268616af11e1a2b16ff20a287b16d6aba77267",
   "description": "Locks the immutable release snapshot content for this release candidate. If public artifacts change, bump the prerelease version or intentionally update the release lock."
 }
