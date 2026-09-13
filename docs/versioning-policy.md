@@ -5,50 +5,18 @@ before the stable `1.0.0` release.
 
 ## Spec Versions
 
-The umbrella Kaspa x402 proposal remains `v1`, while individual bindings and
-covenant templates are versioned independently. Until the first stable tag,
-these identifiers describe compatibility families rather than
-production-stable contracts.
+The umbrella Kaspa x402 proposal is `v1`; bindings, signed domains, and
+covenant templates are versioned independently. Breaking changes must update
+the affected identifiers, schemas, vectors, packages, and docs together.
 
-Breaking wire changes before stability should update vectors, schemas, package
-minor/pre-release versions, and the affected docs in the same change.
+The current `1.0.0-rc.1` surface uses `kaspa-exact-v2`,
+`kaspa-escrow-v3`, and `kaspa-x402-escrow-v4`. The covenant was compiled with
+SilverScript v1.0.0 commit `3ed973335b59269293564805cc2c58a14595ec03`
+(the portable artifact reports compiler version `0.1.0`). It uses explicit DAA
+lock semantics and four-byte KCC-01 dispatch tags.
 
-Current prerelease wire notes:
-
-- `1.0.0-rc.1` cleanly replaces the active covenant with
-  `kaspa-x402-escrow-v4`, compiled by SilverScript v1.0.0 commit
-  `3ed973335b59269293564805cc2c58a14595ec03` (whose portable artifact reports
-  compiler version `0.1.0`). It uses explicit DAA lock semantics and four-byte
-  KCC-01 dispatch tags; Alpha.10 channel state and signature scripts are not
-  accepted or migrated.
-- `0.1.0-alpha.10` introduced the `kaspa-escrow-v2` binding and
-  `kaspa-x402-escrow-v2` KIP-20 covenant. Buyer vouchers authorize a
-  lifetime cumulative ceiling, partial claims advance the settled lifetime
-  total, top-ups retain it, and refund closes the channel. The stable
-  `covenantId` proves identity and successor lineage; runtimes still persist the
-  current outpoint because the ID is not a reverse lookup for the live UTXO.
-- `0.1.0-alpha.9` makes the exact and batch-settlement bindings independently
-  implementable from their language-neutral specifications and conformance
-  vectors. It also closes exact authorization expiry ordering before protected
-  work begins and centralizes canonical batch commitment construction.
-- `0.1.0-alpha.8` introduces `kaspa-exact-v2`, with default
-  `standard-native` and optional reusable KIP-10 `additive` head profiles. The
-  additive successor delta is the sole exact payment; unanswered offers do not
-  reserve or retire heads.
-- `0.1.0-alpha.7` hardens KIP-10 reservation validation and continuation
-  recycling, enforces the Kaspa DAA lock-time boundary and rolling refund
-  safety window, and makes claim-continuation accounting explicit.
-- `0.1.0-alpha.5` made `exact-transfer` observe-only by requiring
-  `transactionId` plus `paymentOutputIndex`.
-- `0.1.0-alpha.6` replaces observe-only exact with KIP-10
-  `exact-transaction` payloads carrying a signed transaction artifact,
-  `transactionEncoding`, and server-advertised buildable reservation terms
-  including borrow redeem script and additive threshold.
-
-v1 RC1 is a clean active replacement. The current runtime, schemas, examples,
-and hosted test surface do not accept or migrate older batch bindings or channel
-state. Published alpha releases remain immutable historical snapshots; they are
-not compatibility targets for the active release candidate.
+This is a clean RC state model. Current runtimes do not accept or migrate
+pre-RC batch bindings or channel state.
 
 ## Package Versions
 
@@ -65,7 +33,7 @@ Rules:
 - keep internal package dependency versions exact;
 - publish release-candidate packages with the `rc` dist-tag;
 - do not move `latest` until the stable `1.0.0` release is approved;
-- keep the published alpha versions and their snapshots immutable.
+- never overwrite a version already published to npm or GitHub.
 
 ## Template IDs
 

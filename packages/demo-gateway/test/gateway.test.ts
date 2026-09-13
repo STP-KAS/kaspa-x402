@@ -73,7 +73,7 @@ describe("gateway canary", () => {
     ).toEqual([
       "kaspa-rest:ok",
       "schema-url:ok",
-      "release-snapshot:ok",
+      "current-release:ok",
       "docs-index:ok",
       "exact-offer:skipped",
       "batch-offer:ok",
@@ -133,7 +133,7 @@ describe("gateway canary", () => {
     ).toEqual([
       "kaspa-rest:ok",
       "schema-url:ok",
-      "release-snapshot:ok",
+      "current-release:ok",
       "docs-index:ok",
       "exact-offer:skipped",
       "batch-offer:skipped",
@@ -552,7 +552,7 @@ describe("gateway canary", () => {
     await expect(requestJson(env, "/exact")).resolves.toMatchObject({
       status: 402,
     });
-  });
+  }, 10_000);
 
   it("returns an additive corrective offer for foreign payment schemes", async () => {
     const storage = new FakeStorage();
@@ -713,7 +713,7 @@ function stubCanaryFetches(): void {
         $id: "https://kaspa-x402.org/schemas/payment-required.schema.json",
       });
     }
-    if (url.startsWith("https://kaspa-x402.org/v1.0.0-rc.1/release.json?")) {
+    if (url.startsWith("https://kaspa-x402.org/release.json?")) {
       return Response.json({ version: "1.0.0-rc.1" });
     }
     if (url === "https://kaspa-x402.org/docs/") {

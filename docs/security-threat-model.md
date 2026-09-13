@@ -1,9 +1,8 @@
 # Security Threat Model
 
 Status: release-candidate threat model for the Testnet-10 exact and batch-settlement
-profiles. v1 RC1 replaces the active batch binding with `kaspa-escrow-v3` and
-template `kaspa-x402-escrow-v4`; older alpha snapshots are historical artifacts,
-not supported runtime profiles.
+profiles. v1 RC1 uses `kaspa-escrow-v3` and template
+`kaspa-x402-escrow-v4`; pre-RC runtime profiles are not supported.
 
 ## Assets
 

@@ -6,14 +6,10 @@ import { isPublishableDirtyPath } from "./site-inputs.mjs";
 import { fileURLToPath } from "node:url";
 
 import {
-  ACTIVE_REDIRECTS,
   CONTRACT_FILES,
   PRIVATE_SITE_PATTERNS,
   PUBLIC_DOC_FILES,
   PUBLISHABLE_PACKAGES,
-  RELEASE_DOC_FILES,
-  RELEASE_LOCK_DIR,
-  RELEASE_SNAPSHOT_DIR,
   SCHEMA_FILES,
   SITE_ASSET_FILES,
   SITE_DIST,
@@ -31,17 +27,8 @@ const siteScriptFiles = [
   "scripts/site-build.mjs",
   "scripts/site-check.mjs",
   "scripts/site-config.mjs",
+  "scripts/site-inputs.mjs",
   "scripts/site-serve.mjs",
-];
-const releaseSnapshotScope =
-  "schemas, specs, covenant artifacts, selected docs, vectors, package metadata, and release metadata";
-const activePrereleaseOnlyRoutes = [
-  "/",
-  "/demo/",
-  "/assets/",
-  "/vendor/",
-  "/site-manifest.json",
-  "/releases/",
 ];
 
 if (!fs.existsSync(outDir)) {
@@ -101,78 +88,41 @@ function checkCopiedArtifacts() {
     ...PUBLIC_DOC_FILES,
     ...vectors,
   ];
-  const releaseFiles = [
-    ...SCHEMA_FILES,
-    ...SPEC_FILES,
-    ...CONTRACT_FILES,
-    ...RELEASE_DOC_FILES,
-    ...vectors,
-  ];
-  const releasePath = readJson(
-    path.join(outDir, "site-manifest.json"),
-  ).releasePath;
   for (const source of activeFiles) {
     assertSameBytes(path.join(root, source), path.join(outDir, source), source);
-  }
-  for (const source of releaseFiles) {
-    assertSameBytes(
-      path.join(root, source),
-      path.join(outDir, releasePath, source),
-      `${releasePath}/${source}`,
-    );
   }
 }
 
 function checkMetadataFreshness() {
   const manifest = readJson(path.join(outDir, "site-manifest.json"));
-  const release = readJson(
-    path.join(outDir, manifest.releasePath, "release.json"),
-  );
+  const release = readJson(path.join(outDir, "release.json"));
   const packages = readPackages();
   const publicPackages = packages.filter((pkg) =>
     PUBLISHABLE_PACKAGES.includes(pkg.name),
   );
-  const releasePackages = { releaseVersion: manifest.releaseVersion, packages };
   const dirtyInputs = dirtyPublishableInputs();
-  const currentLock = readReleaseLock(manifest.releaseVersion);
-  const releaseDirtyInputs = currentLock?.frozen === true ? [] : dirtyInputs;
-  const expectedReleaseHash = releaseContentHash(
-    manifest.releasePath,
-    lockedReleaseMetadata(release),
-  );
   const headersPath = path.join(outDir, "_headers");
+  const expectedRelease = {
+    version: manifest.releaseVersion,
+    channel: "rc",
+    network: "kaspa:testnet-10",
+    generatedFrom: manifest.generatedFrom,
+    commitDate: manifest.commitDate,
+    sourceState: manifest.sourceState,
+    dirtyInputs,
+    npmInstall: releaseNpmInstall(manifest.releaseVersion),
+    packages: publicPackages,
+  };
 
   assertFile(path.join(outDir, "404.html"), "404 page");
+  assertFile(path.join(outDir, "release.json"), "release.json");
+  assertContains(headersPath, "/release.json", "release.json cache header");
   if (manifest.generatedFrom !== git(["rev-parse", "HEAD"]))
     fail("site-manifest generatedFrom does not match HEAD");
-  if (
-    releaseDirtyInputs.length > 0 &&
-    release.generatedFrom !== manifest.generatedFrom
-  )
-    fail("dirty release generatedFrom does not match site-manifest");
-  if (releaseDirtyInputs.length === 0 && "generatedFrom" in release)
-    fail("locked release should not vary by build commit");
-  if (release.version !== manifest.releaseVersion)
-    fail("release version does not match site-manifest");
-  if (manifest.releaseSnapshotScope !== releaseSnapshotScope)
-    fail("site-manifest release snapshot scope is stale");
-  if (release.snapshotScope !== releaseSnapshotScope)
-    fail("release snapshot scope is stale");
-  if (
-    JSON.stringify(manifest.activePrereleaseOnlyRoutes) !==
-    JSON.stringify(activePrereleaseOnlyRoutes)
-  )
-    fail("site-manifest active-prerelease routes are stale");
-  if (
-    JSON.stringify(release.activePrereleaseOnlyRoutes) !==
-    JSON.stringify(activePrereleaseOnlyRoutes)
-  )
-    fail("release active-prerelease routes are stale");
-  if (
-    JSON.stringify(release.npmInstall) !==
-    JSON.stringify(releaseNpmInstall(manifest.releaseVersion))
-  )
-    fail("release npm install metadata is stale");
+  if (manifest.releaseMetadata !== "/release.json")
+    fail("site-manifest release metadata route is stale");
+  if (JSON.stringify(release) !== JSON.stringify(expectedRelease))
+    fail("release.json is stale");
   if (JSON.stringify(manifest.packages) !== JSON.stringify(publicPackages))
     fail("site-manifest package metadata is stale");
   if (
@@ -180,100 +130,10 @@ function checkMetadataFreshness() {
     JSON.stringify(publicPackages)
   )
     fail("packages.json is stale");
-  const versionedPackages = readJson(
-    path.join(outDir, manifest.releasePath, "packages.json"),
-  );
-  if ("generatedFrom" in versionedPackages || "commitDate" in versionedPackages)
-    fail("release packages.json should not vary by build commit");
-  if (JSON.stringify(versionedPackages) !== JSON.stringify(releasePackages)) {
-    fail("release packages.json is stale");
-  }
   if (JSON.stringify(manifest.dirtyInputs) !== JSON.stringify(dirtyInputs))
     fail("site-manifest dirtyInputs is stale");
-  if (
-    JSON.stringify(release.dirtyInputs) !== JSON.stringify(releaseDirtyInputs)
-  )
-    fail("release dirtyInputs is stale");
-  if (release.contentSha256 !== expectedReleaseHash)
-    fail("release content hash is stale");
   if (requireClean && dirtyInputs.length > 0)
     fail(`publishable inputs are dirty: ${dirtyInputs.join(", ")}`);
-  checkReleaseSnapshots(manifest, releaseDirtyInputs, headersPath);
-}
-
-function checkReleaseSnapshots(manifest, dirtyInputs, headersPath) {
-  const releaseLocks = readReleaseLocks();
-  const expectedReleases = releaseLocks.map((entry) => ({
-    version: entry.version,
-    path: `/v${entry.version}/`,
-    metadata: `/v${entry.version}/release.json`,
-    contentSha256: entry.contentSha256,
-  }));
-  if (
-    !releaseLocks.some((entry) => entry.version === manifest.releaseVersion)
-  ) {
-    expectedReleases.push({
-      version: manifest.releaseVersion,
-      path: `/v${manifest.releaseVersion}/`,
-      metadata: `/v${manifest.releaseVersion}/release.json`,
-      contentSha256: undefined,
-    });
-    expectedReleases.sort((left, right) =>
-      compareVersions(left.version, right.version),
-    );
-  }
-  if (JSON.stringify(manifest.releases) !== JSON.stringify(expectedReleases))
-    fail("site-manifest release list is stale");
-
-  const currentLock = releaseLocks.find(
-    (entry) => entry.version === manifest.releaseVersion,
-  );
-  if (!currentLock && (requireClean || dirtyInputs.length === 0))
-    fail(`release ${manifest.releaseVersion} is missing a content lock`);
-
-  for (const lock of releaseLocks) {
-    const releasePath = `v${lock.version}`;
-    const releaseJson = path.join(outDir, releasePath, "release.json");
-    assertFile(releaseJson, `${releasePath}/release.json`);
-    if (!fs.existsSync(releaseJson)) continue;
-
-    const release = readJson(releaseJson);
-    const expectedHash = releaseContentHash(
-      releasePath,
-      lockedReleaseMetadata(release),
-    );
-    if (release.version !== lock.version)
-      fail(`${releasePath}/release.json version is stale`);
-    if (release.contentSha256 !== lock.contentSha256)
-      fail(`release content differs from ${lock.path}`);
-    if (release.contentLock !== lock.path)
-      fail(`${releasePath}/release.json content lock path is stale`);
-    if (expectedHash !== lock.contentSha256)
-      fail(`${releasePath} bytes differ from ${lock.path}`);
-
-    for (const route of [
-      `/${releasePath}/`,
-      `/${releasePath}/index.html`,
-      `/${releasePath}/schemas/*.json`,
-      `/${releasePath}/spec/*`,
-      `/${releasePath}/docs/*`,
-      `/${releasePath}/vectors/*`,
-      `/${releasePath}/release.json`,
-      `/${releasePath}/packages.json`,
-      `/${releasePath}/vectors/index.json`,
-    ]) {
-      assertContains(headersPath, route, `immutable release header ${route}`);
-    }
-
-    checkActivePrereleaseExclusions(releasePath);
-    if (releasePath !== manifest.releasePath || dirtyInputs.length === 0) {
-      assertSameTree(
-        path.join(root, RELEASE_SNAPSHOT_DIR, releasePath),
-        path.join(outDir, releasePath),
-        `${releasePath} stored snapshot`,
-      );
-    }
-  }
 }
 
 function checkUntrackedPublishableFiles() {
@@ -385,19 +245,6 @@ function checkAssetAllowlist() {
   );
 }
 
-function checkActivePrereleaseExclusions(releasePath) {
-  for (const route of activePrereleaseOnlyRoutes) {
-    if (route === "/") continue;
-    const relative = route.replace(/^\/|\/$/g, "");
-    if (!relative) continue;
-    const candidate = path.join(outDir, releasePath, relative);
-    if (fs.existsSync(candidate))
-      fail(
-        `active-prerelease route included in release snapshot: ${releasePath}/${relative}`,
-      );
-  }
-}
-
 function checkContent() {
   const textFiles = listFiles(outDir).filter((file) => {
     const relative = path.relative(outDir, file).replaceAll(path.sep, "/");
@@ -444,99 +291,7 @@ function checkContent() {
     }
   }
 
-  const activeTextFiles = textFiles.filter((file) => {
-    const relative = path.relative(outDir, file).replaceAll(path.sep, "/");
-    return !/^v[^/]+\//.test(relative);
-  });
-  const staleCurrentClaims = [
-    /standard-output storage-mass floor(?:,|\s*\()/i,
-    /must (?:clear|sit at or above)[^.]*storage-mass/i,
-    /Alpha\.6 focuses on preferred KIP-10/i,
-    /For real paid requests, use the hosted gateway/i,
-    /remains the paid-canary-proven alpha\.\d+ deployment until/i,
-    /paid-canary-proven Alpha\.11/i,
-    /funded deployment proof is pending/i,
-    /public registry and gateway remain Alpha\.10/i,
-    /paid-canary-proven Alpha\.10 Worker/i,
-    /Status: v1 RC1 deployment candidate/i,
-    /paid-canary-proven hosted deployment remains Alpha\.10/i,
-    /Pending\. Do not mark this cutover complete/i,
-  ];
-  for (const file of activeTextFiles) {
-    const relative = path.relative(outDir, file).replaceAll(path.sep, "/");
-    const text = fs.readFileSync(file, "utf8");
-    for (const pattern of staleCurrentClaims) {
-      if (pattern.test(text))
-        fail(`stale active-alpha claim in ${relative}: ${pattern}`);
-    }
-  }
-
-  assertContains(
-    path.join(outDir, "index.html"),
-    "Current recommended Testnet release",
-    "index.html current v1 RC1 release status",
-  );
-  assertContains(
-    path.join(outDir, "demo/index.html"),
-    "recorded funded and scheduled canary evidence",
-    "demo/index.html current v1 RC1 deployment status",
-  );
-  assertContains(
-    path.join(outDir, "docs/testnet-gateway.md"),
-    "Historical Alpha.10 Evidence",
-    "docs/testnet-gateway.md historical deployment boundary",
-  );
-  assertContains(
-    path.join(outDir, "docs/testnet-gateway.md"),
-    "Status: v1 RC1 is live",
-    "docs/testnet-gateway.md current v1 RC1 deployment proof",
-  );
-  for (const marker of [
-    "Exact Tagged-Source Funded Run",
-    "040b1ec8335abadbb3c69cf1ea720ae45816b0f7",
-    "81af41d91b376230a056bdab9995d67707c08e43f8eb224a8701e3d921e500a0",
-    "not the public gateway deployment",
-    "8284780efd055d22d0685f790df3a26bc2c2e85a",
-  ]) {
-    assertContains(
-      path.join(outDir, "docs/testnet-gateway.md"),
-      marker,
-      "docs/testnet-gateway.md exact tagged-source evidence boundary",
-    );
-  }
-  for (const [relative, marker] of [
-    [
-      "docs/live-testnet-report.md",
-      "successful `1.0.0-rc.1` funded live harness run",
-    ],
-    [
-      "docs/demo-implementer-guide.md",
-      "current recommended Testnet release explicitly",
-    ],
-  ]) {
-    assertContains(
-      path.join(outDir, relative),
-      marker,
-      `${relative} release evidence boundary`,
-    );
-  }
-  for (const [relative, marker] of [
-    [
-      "docs/release-publish.md",
-      "was published, tagged, released, and deployed",
-    ],
-    ["docs/demo-interop-checklist.md", "current v1 RC1 Testnet"],
-  ]) {
-    assertContains(
-      path.join(root, relative),
-      marker,
-      `${relative} Alpha.10 evidence boundary`,
-    );
-  }
-
   const home = path.join(outDir, "index.html");
-  const specIndex = path.join(outDir, "spec/index.html");
-  const docsIndex = path.join(outDir, "docs/index.html");
   assertContains(home, "Payment schemes", "homepage scheme heading");
   assertContains(
     home,
@@ -558,35 +313,11 @@ function checkContent() {
     'binding: "kaspa-escrow-v3"',
     "browser demo uses active escrow binding",
   );
-  for (const stale of [
-    "kaspa-exact-v1",
-    "live-covenant-proof-harness",
-    "transaction-v1-plan",
-  ]) {
-    assertNotContains(specIndex, stale, `active spec index excludes ${stale}`);
-  }
-  for (const stale of ["public-proposal", "demo-interop-checklist"]) {
-    assertNotContains(docsIndex, stale, `active docs index excludes ${stale}`);
-  }
   for (const privatePackage of ["@kaspa-x402/cli", "@kaspa-x402/facilitator"]) {
     assertNotContains(
       home,
       `<code>${privatePackage}</code>`,
       `homepage excludes ${privatePackage}`,
-    );
-  }
-
-  const redirectsPath = path.join(outDir, "_redirects");
-  assertNotContains(
-    redirectsPath,
-    "/spec/kaspa-exact-v1/",
-    "active redirects exclude historical exact binding",
-  );
-  for (const { from, to, status } of ACTIVE_REDIRECTS) {
-    assertContains(
-      redirectsPath,
-      `${from} ${to} ${status}`,
-      `active compatibility redirect ${from}`,
     );
   }
 }
@@ -674,35 +405,6 @@ function assertSameBytes(source, target, label) {
     fail(`stale copied artifact: ${label}`);
 }
 
-function assertSameTree(sourceDir, targetDir, label) {
-  if (!fs.existsSync(sourceDir)) {
-    fail(
-      `missing ${label}: ${path.relative(root, sourceDir).replaceAll(path.sep, "/")}`,
-    );
-    return;
-  }
-  if (!fs.existsSync(targetDir)) {
-    fail(
-      `missing ${label}: ${path.relative(outDir, targetDir).replaceAll(path.sep, "/")}`,
-    );
-    return;
-  }
-  const sourceFiles = listRelativeFiles(sourceDir);
-  const targetFiles = listRelativeFiles(targetDir);
-  if (JSON.stringify(sourceFiles) !== JSON.stringify(targetFiles)) {
-    fail(`stored release snapshot file list differs: ${label}`);
-    return;
-  }
-  for (const file of sourceFiles) {
-    if (
-      sha256File(path.join(sourceDir, file)) !==
-      sha256File(path.join(targetDir, file))
-    ) {
-      fail(`stored release snapshot differs: ${label}/${file}`);
-    }
-  }
-}
-
 function assertContains(file, needle, label) {
   if (!fs.existsSync(file)) {
     fail(`missing ${label}`);
@@ -766,17 +468,13 @@ function dirtyPublishableInputs() {
     ...sitePackageFiles(),
     ...siteScriptFiles,
     ...siteSourceInputs(),
-    ...listFiles(path.join(root, RELEASE_LOCK_DIR)).map((file) =>
-      path.relative(root, file).replaceAll(path.sep, "/"),
-    ),
-    ...trackedFiles(RELEASE_LOCK_DIR),
   ]);
   return git(["status", "--porcelain=v1", "--untracked-files=all"])
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => line.slice(3).trim())
     .map((file) => file.replace(/^"|"$/g, ""))
-    .filter((file) => isPublishableDirtyPath(file, inputs, RELEASE_LOCK_DIR))
+    .filter((file) => isPublishableDirtyPath(file, inputs))
     .sort();
 }
 
@@ -791,28 +489,6 @@ function sitePackageFiles() {
   return trackedPackageFiles().filter((file) =>
     sitePackages.has(readJson(path.join(root, file)).name),
   );
-}
-
-function readReleaseLock(version) {
-  const relativePath = `${RELEASE_LOCK_DIR}/v${version}.json`;
-  const fullPath = path.join(root, relativePath);
-  if (!fs.existsSync(fullPath)) return undefined;
-  return {
-    ...JSON.parse(fs.readFileSync(fullPath, "utf8")),
-    path: relativePath,
-  };
-}
-
-function readReleaseLocks() {
-  return listFiles(path.join(root, RELEASE_LOCK_DIR))
-    .map((file) => path.relative(root, file).replaceAll(path.sep, "/"))
-    .filter((file) => /^site\/releases\/v[^/]+\.json$/.test(file))
-    .map((file) => ({ ...readJson(path.join(root, file)), path: file }))
-    .sort((a, b) => compareVersions(a.version, b.version));
-}
-
-function compareVersions(left, right) {
-  return String(left).localeCompare(String(right), "en", { numeric: true });
 }
 
 function siteSourceInputs() {
@@ -847,12 +523,6 @@ function listFiles(dir) {
     .sort();
 }
 
-function listRelativeFiles(dir) {
-  return listFiles(dir)
-    .map((file) => path.relative(dir, file).replaceAll(path.sep, "/"))
-    .sort();
-}
-
 function sha256File(file) {
   return crypto
     .createHash("sha256")
@@ -862,68 +532,6 @@ function sha256File(file) {
 
 function releaseNpmInstall(version) {
   return PUBLISHABLE_PACKAGES.map((name) => `${name}@${version}`);
-}
-
-function lockedReleaseMetadata(release) {
-  const activeRoutesMetadata =
-    "activePrereleaseOnlyRoutes" in release
-      ? {
-          activePrereleaseOnlyRoutes: release.activePrereleaseOnlyRoutes,
-        }
-      : {
-          activeAlphaOnlyRoutes: release.activeAlphaOnlyRoutes,
-        };
-  return {
-    version: release.version,
-    sourceState: "locked",
-    dirtyInputs: [],
-    contentLock: release.contentLock,
-    snapshotScope: release.snapshotScope,
-    ...activeRoutesMetadata,
-    unversionedRoutes: release.unversionedRoutes,
-    npmInstall: release.npmInstall,
-    artifacts: release.artifacts,
-  };
-}
-
-function releaseContentHash(releasePath, lockedRelease) {
-  const records = listFiles(path.join(outDir, releasePath))
-    .map((file) => ({
-      file,
-      target: path.relative(outDir, file).replaceAll(path.sep, "/"),
-    }))
-    .filter(({ target }) => target !== `${releasePath}/release.json`)
-    .map(({ file, target }) => fileRecord(target, file));
-  records.push(
-    contentRecord(`${releasePath}/release.json`, jsonText(lockedRelease)),
-  );
-  return crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify(records.sort((a, b) => a.target.localeCompare(b.target))),
-    )
-    .digest("hex");
-}
-
-function fileRecord(target, file) {
-  return {
-    target,
-    bytes: fs.statSync(file).size,
-    sha256: sha256File(file),
-  };
-}
-
-function contentRecord(target, value) {
-  const buffer = Buffer.from(value);
-  return {
-    target,
-    bytes: buffer.byteLength,
-    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
-  };
-}
-
-function jsonText(value) {
-  return `${JSON.stringify(value, null, 2)}\n`;
 }
 
 function fail(message) {
