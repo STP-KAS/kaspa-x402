@@ -491,6 +491,19 @@ function checkContent() {
     "Status: v1 RC1 is live",
     "docs/testnet-gateway.md current v1 RC1 deployment proof",
   );
+  for (const marker of [
+    "Exact Tagged-Source Funded Run",
+    "040b1ec8335abadbb3c69cf1ea720ae45816b0f7",
+    "81af41d91b376230a056bdab9995d67707c08e43f8eb224a8701e3d921e500a0",
+    "not the public gateway deployment",
+    "8284780efd055d22d0685f790df3a26bc2c2e85a",
+  ]) {
+    assertContains(
+      path.join(outDir, "docs/testnet-gateway.md"),
+      marker,
+      "docs/testnet-gateway.md exact tagged-source evidence boundary",
+    );
+  }
   for (const [relative, marker] of [
     [
       "docs/live-testnet-report.md",
