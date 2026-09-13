@@ -1720,20 +1720,25 @@ describe("direct-mode client", () => {
     ).rejects.toThrow("successor must belong to the signed transaction");
   });
 
-  it("rejects deposit results whose resolved UTXO is below the funding target", async () => {
-    const provider = new FakeFundingProvider();
-    provider.depositMode = "outpoint-underfunded";
-    const client = makeClient({ provider, store: new MemoryChannelStore() });
+  for (const depositMode of [
+    "outpoint-underfunded",
+    "outpoint-overfunded",
+  ] as const) {
+    it(`rejects ${depositMode} deposit results outside the authorized funding target`, async () => {
+      const provider = new FakeFundingProvider();
+      provider.depositMode = depositMode;
+      const client = makeClient({ provider, store: new MemoryChannelStore() });
 
-    await expect(
-      client.createPayment(
-        encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
-        {
-          url: "https://api.example.test/data",
-        },
-      ),
-    ).rejects.toThrow("below the required funding target");
-  });
+      await expect(
+        client.createPayment(
+          encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+          {
+            url: "https://api.example.test/data",
+          },
+        ),
+      ).rejects.toThrow("must equal the authorized funding target");
+    });
+  }
 
   it("recovers a prepared genesis after transport uncertainty without rebuilding it", async () => {
     const provider = new FakeFundingProvider();
@@ -4546,8 +4551,11 @@ class FakeFundingProvider implements FundingProvider {
     string,
     { transactionId: string; successor: FundingProviderUtxo }
   >();
-  depositMode: "outpoint" | "txid-only-ambiguous" | "outpoint-underfunded" =
-    "outpoint";
+  depositMode:
+    | "outpoint"
+    | "txid-only-ambiguous"
+    | "outpoint-underfunded"
+    | "outpoint-overfunded" = "outpoint";
   sendFinality: "broadcast" | "accepted" | "confirmed" = "accepted";
   sendError?: Error;
   fundingSendFinality: "broadcast" | "accepted" | "confirmed" = "accepted";
@@ -4598,7 +4606,11 @@ class FakeFundingProvider implements FundingProvider {
     });
     const outpoint = { txid: FUNDING_TX, index: this.deposits.length - 1 };
     const amount =
-      this.depositMode === "outpoint-underfunded" ? "50" : request.amount;
+      this.depositMode === "outpoint-underfunded"
+        ? "50"
+        : this.depositMode === "outpoint-overfunded"
+          ? "2000"
+          : request.amount;
     const successor = {
       outpoint,
       covenantId: COVENANT_ID,

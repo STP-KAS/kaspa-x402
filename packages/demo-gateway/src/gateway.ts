@@ -58,7 +58,9 @@ const MAX_ADMIN_JSON_BYTES = 64 * 1024;
 const GATEWAY_PUBLIC_ADMISSION_TTL_MS = 5 * 60 * 1_000;
 // Fast per-isolate and fine-grained backstop. The outer GatewayState lease
 // enforces the configured request cap across the deployment.
-const gatewayPublicBoundary = new MemoryPublicBoundaryController();
+const gatewayPublicBoundary = new MemoryPublicBoundaryController({
+  adapterTimeoutMs: 60_000,
+});
 
 export async function handleGatewayRequest(
   request: Request,

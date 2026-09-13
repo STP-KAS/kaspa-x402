@@ -67,8 +67,8 @@ const MAX_SAFE_TRANSACTION_INPUTS = 16;
 const MAX_SAFE_TRANSACTION_OUTPUTS = 64;
 const MAX_SAFE_TRANSACTION_FEE_SOMPI = 100_000_000n;
 const MAX_KASPA_REST_RESPONSE_BYTES = 512 * 1024;
-const MAX_PNN_MESSAGE_BYTES = 512 * 1024;
 const MAX_PNN_SELECTED_CHAIN_BYTES = 4 * 1024 * 1024;
+const MAX_PNN_MESSAGE_BYTES = MAX_PNN_SELECTED_CHAIN_BYTES + 64 * 1024;
 const MAX_PNN_UTXO_ENTRIES = 4_096;
 const MAX_KASPA_REST_UTXOS_PER_ADDRESS = 512;
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
@@ -93,7 +93,7 @@ type PnnRpc = {
   getUtxosByAddresses(addresses: string[]): Promise<{ entries?: unknown[] }>;
   getVirtualChainFromBlockV2?(request: {
     startHash: string;
-    dataVerbosityLevel: "Full";
+    dataVerbosityLevel: "Low" | "High";
     minConfirmationCount: number;
   }): Promise<unknown>;
   getBlockDagInfo?(): Promise<unknown>;
@@ -829,6 +829,7 @@ export class KaspaPnnClient {
           request.lineage.checkpoint.blockHash,
           request.minConfirmationCount,
           this.#timeoutMs,
+          "High",
         );
         const after = await pnnChainCheckpoint(rpc, this.#timeoutMs);
         if (sameChainCheckpoint(before, after)) {
@@ -884,6 +885,45 @@ export class KaspaPnnClient {
             "Kaspa PNN accepting block response does not match transaction evidence",
           );
         }
+        if ((verbose.isChainBlock ?? verbose.is_chain_block) !== true) {
+          throw invalidTransaction(
+            "Kaspa PNN accepting block is not a selected-chain block",
+          );
+        }
+        const acceptingBlockBlueScore = uintStringValue(
+          requiredRecord(
+            acceptingBlock.header,
+            "Kaspa PNN accepting block header",
+          ).blueScore,
+          "Kaspa PNN accepting block blue score",
+        );
+        if (acceptingBlockBlueScore !== evidence.acceptingBlockBlueScore) {
+          throw invalidTransaction(
+            "Kaspa PNN accepting block score conflicts with transaction evidence",
+          );
+        }
+        if (BigInt(before.blueScore) < BigInt(acceptingBlockBlueScore)) {
+          throw invalidTransaction(
+            "Kaspa PNN accepting block exceeds the selected-chain checkpoint",
+          );
+        }
+        const confirmationDistance =
+          BigInt(before.blueScore) - BigInt(acceptingBlockBlueScore);
+        if (confirmationDistance <= BigInt(minConfirmationCount)) {
+          const after = await pnnChainCheckpoint(rpc, this.#timeoutMs);
+          if (sameChainCheckpoint(before, after)) {
+            throw invalidTransaction(
+              "Kaspa PNN accepting block has not reached the configured selected-chain depth",
+            );
+          }
+          continue;
+        }
+        const proofMinConfirmationCount = confirmationDistance - 1n;
+        if (proofMinConfirmationCount > BigInt(Number.MAX_SAFE_INTEGER)) {
+          throw invalidTransaction(
+            "Kaspa PNN confirmation distance exceeds the safe integer range",
+          );
+        }
         const selectedParent = hashValue(
           verbose.selectedParentHash ?? verbose.selected_parent_hash,
           "Kaspa PNN accepting block selected parent",
@@ -891,8 +931,9 @@ export class KaspaPnnClient {
         const selected = await pnnSelectedChainFromCheckpoint(
           rpc,
           selectedParent,
-          minConfirmationCount,
+          Number(proofMinConfirmationCount),
           this.#timeoutMs,
+          "Low",
         );
         const proofBlock = selected.addedChainBlocks.find(
           (block) => block.blockHash === evidence.acceptingBlockHash.toLowerCase(),
@@ -902,21 +943,64 @@ export class KaspaPnnClient {
             pnnAcceptedTransactionId(transaction) ===
             evidence.transactionId.toLowerCase(),
         );
-        const after = await pnnChainCheckpoint(rpc, this.#timeoutMs);
-        if (!sameChainCheckpoint(before, after)) continue;
+        if (
+          proofBlock &&
+          uintStringValue(
+            proofBlock.header.blueScore,
+            "Kaspa PNN selected-chain proof block blue score",
+          ) !== acceptingBlockBlueScore
+        ) {
+          throw invalidTransaction(
+            "Kaspa PNN selected-chain proof conflicts with the accepting block",
+          );
+        }
         if (!proofBlock || !transactionAccepted) {
           throw invalidTransaction(
             "Kaspa PNN did not prove the accepted transaction at the configured selected-chain depth",
           );
         }
+        const [rawVerifiedAcceptingBlock, rawVerifiedCheckpointBlock] =
+          await Promise.all([
+            withTimeout(
+              rpc.getBlock({
+                hash: evidence.acceptingBlockHash,
+                includeTransactions: false,
+              }),
+              this.#timeoutMs,
+              "pnn recheck accepting block",
+            ),
+            withTimeout(
+              rpc.getBlock({
+                hash: before.blockHash,
+                includeTransactions: false,
+              }),
+              this.#timeoutMs,
+              "pnn recheck proof checkpoint",
+            ),
+          ]);
+        const verifiedAcceptingBlock = pnnSelectedBlockCheckpoint(
+          rawVerifiedAcceptingBlock,
+          evidence.acceptingBlockHash,
+          "accepting block",
+        );
+        const verifiedCheckpoint = pnnSelectedBlockCheckpoint(
+          rawVerifiedCheckpointBlock,
+          before.blockHash,
+          "proof checkpoint",
+        );
+        if (
+          verifiedAcceptingBlock.blueScore !== acceptingBlockBlueScore ||
+          !sameChainCheckpoint(verifiedCheckpoint, before)
+        ) {
+          throw invalidTransaction(
+            "Kaspa PNN selected-chain proof changed during its bounded read",
+          );
+        }
         return {
           ...structuredClone(evidence),
-          acceptingBlockBlueScore: uintStringValue(
-            proofBlock.header.blueScore,
-            "Kaspa PNN accepting block blue score",
-          ),
+          acceptingBlockBlueScore,
           confirmationCount: minConfirmationCount,
-          checkpoint: after,
+          checkpoint: before,
         };
       }
       throw invalidTransaction(
@@ -1132,7 +1216,7 @@ class JsonPnnRpc implements PnnRpc {
 
   getVirtualChainFromBlockV2(request: {
     startHash: string;
-    dataVerbosityLevel: "Full";
+    dataVerbosityLevel: "Low" | "High";
     minConfirmationCount: number;
   }): Promise<unknown> {
     return this.#request("getVirtualChainFromBlockV2", request);
@@ -2348,11 +2432,51 @@ async function pnnChainCheckpoint(
   };
 }
 
+function pnnSelectedBlockCheckpoint(
+  rawBlock: unknown,
+  expectedHash: string,
+  label: string,
+): ChainCheckpoint {
+  const block = unwrapRecord(rawBlock, "block");
+  const header = requiredRecord(
+    block.header,
+    `Kaspa PNN ${label} header`,
+  );
+  const verbose = requiredRecord(
+    block.verboseData ?? block.verbose_data,
+    `Kaspa PNN ${label} verbose data`,
+  );
+  const blockHash = hashValue(
+    header.hash ?? verbose.hash,
+    `Kaspa PNN ${label} hash`,
+  );
+  if (
+    blockHash !== expectedHash.toLowerCase() ||
+    (verbose.isChainBlock ?? verbose.is_chain_block) !== true
+  ) {
+    throw invalidTransaction(
+      `Kaspa PNN ${label} is not the expected selected-chain block`,
+    );
+  }
+  return {
+    blockHash,
+    blueScore: uintStringValue(
+      header.blueScore ?? header.blue_score,
+      `Kaspa PNN ${label} blue score`,
+    ),
+    daaScore: uintStringValue(
+      header.daaScore ?? header.daa_score,
+      `Kaspa PNN ${label} DAA score`,
+    ),
+  };
+}
+
 async function pnnSelectedChainFromCheckpoint(
   rpc: PnnRpc,
   initialHash: Hash32Hex,
   minConfirmationCount: number,
   timeoutMs: number,
+  dataVerbosityLevel: "Low" | "High",
 ): Promise<PnnSelectedChain> {
   if (
     !Number.isSafeInteger(minConfirmationCount) ||
@@ -2370,7 +2494,7 @@ async function pnnSelectedChainFromCheckpoint(
     const raw = await withTimeout(
       rpc.getVirtualChainFromBlockV2!({
         startHash,
-        dataVerbosityLevel: "Full",
+        dataVerbosityLevel,
         minConfirmationCount,
       }),
       timeoutMs,

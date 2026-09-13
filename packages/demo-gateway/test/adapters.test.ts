@@ -1070,8 +1070,8 @@ describe("KaspaPnnClient", () => {
     const selectedParentHash = "d3".repeat(32);
     const checkpoint = {
       blockHash: "d4".repeat(32),
-      blueScore: "1000",
-      daaScore: "1000",
+      blueScore: "1005",
+      daaScore: "1005",
     };
     let selectedCalls = 0;
     const rpcFactory = mockPnnRpcFactory(() => ({
@@ -1097,6 +1097,7 @@ describe("KaspaPnnClient", () => {
               verboseData: {
                 hash: acceptingBlockHash,
                 selectedParentHash,
+                isChainBlock: true,
               },
             },
           };
@@ -1108,12 +1109,16 @@ describe("KaspaPnnClient", () => {
               blueScore: checkpoint.blueScore,
               daaScore: checkpoint.daaScore,
             },
-            verboseData: { hash: checkpoint.blockHash },
+            verboseData: {
+              hash: checkpoint.blockHash,
+              isChainBlock: true,
+            },
           },
         };
       },
       async getVirtualChainFromBlockV2(request) {
-        expect(request.minConfirmationCount).toBe(30);
+        expect(request.minConfirmationCount).toBe(33);
+        expect(request.dataVerbosityLevel).toBe("Low");
         selectedCalls += 1;
         if (selectedCalls === 1) {
           expect(request.startHash).toBe(selectedParentHash);
@@ -2293,7 +2298,7 @@ type MockPnnRpc = {
   getUtxosByAddresses(addresses: string[]): Promise<{ entries?: unknown[] }>;
   getVirtualChainFromBlockV2?(request: {
     startHash: string;
-    dataVerbosityLevel: "Full";
+    dataVerbosityLevel: "Low" | "High";
     minConfirmationCount: number;
   }): Promise<unknown>;
   getBlockDagInfo?(): Promise<unknown>;
@@ -2370,7 +2375,7 @@ function pnnLineageFixture(
       };
     },
     async getVirtualChainFromBlockV2(request) {
-      expect(request.dataVerbosityLevel).toBe("Full");
+      expect(request.dataVerbosityLevel).toBe("High");
       expect(request.minConfirmationCount).toBe(30);
       selectedCalls += 1;
       if (selectedCalls > 1) {
