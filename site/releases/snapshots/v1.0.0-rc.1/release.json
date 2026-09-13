@@ -4,7 +4,7 @@
   "dirtyInputs": [],
   "contentLock": "site/releases/v1.0.0-rc.1.json",
   "snapshotScope": "schemas, specs, covenant artifacts, selected docs, vectors, package metadata, and release metadata",
-  "activeAlphaOnlyRoutes": [
+  "activePrereleaseOnlyRoutes": [
     "/",
     "/demo/",
     "/assets/",
@@ -477,5 +477,5 @@
       "sha256": "36564ac622863b7621f3d95fb1fa6c8a126d813d238919c3aa856c4a04cd0508"
     }
   ],
-  "contentSha256": "59058d9665d573dbe5d5cb6242268616af11e1a2b16ff20a287b16d6aba77267"
+  "contentSha256": "449d4fc82f8d57a86cd8c9572daf1c8189844268738e8185abf66262c0d6c5a5"
 }

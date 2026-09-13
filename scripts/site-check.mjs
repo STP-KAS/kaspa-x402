@@ -35,7 +35,7 @@ const siteScriptFiles = [
 ];
 const releaseSnapshotScope =
   "schemas, specs, covenant artifacts, selected docs, vectors, package metadata, and release metadata";
-const activeAlphaOnlyRoutes = [
+const activePrereleaseOnlyRoutes = [
   "/",
   "/demo/",
   "/assets/",
@@ -159,15 +159,15 @@ function checkMetadataFreshness() {
   if (release.snapshotScope !== releaseSnapshotScope)
     fail("release snapshot scope is stale");
   if (
-    JSON.stringify(manifest.activeAlphaOnlyRoutes) !==
-    JSON.stringify(activeAlphaOnlyRoutes)
+    JSON.stringify(manifest.activePrereleaseOnlyRoutes) !==
+    JSON.stringify(activePrereleaseOnlyRoutes)
   )
-    fail("site-manifest active-alpha routes are stale");
+    fail("site-manifest active-prerelease routes are stale");
   if (
-    JSON.stringify(release.activeAlphaOnlyRoutes) !==
-    JSON.stringify(activeAlphaOnlyRoutes)
+    JSON.stringify(release.activePrereleaseOnlyRoutes) !==
+    JSON.stringify(activePrereleaseOnlyRoutes)
   )
-    fail("release active-alpha routes are stale");
+    fail("release active-prerelease routes are stale");
   if (
     JSON.stringify(release.npmInstall) !==
     JSON.stringify(releaseNpmInstall(manifest.releaseVersion))
@@ -265,7 +265,7 @@ function checkReleaseSnapshots(manifest, dirtyInputs, headersPath) {
       assertContains(headersPath, route, `immutable release header ${route}`);
     }
 
-    checkActiveAlphaExclusions(releasePath);
+    checkActivePrereleaseExclusions(releasePath);
     if (releasePath !== manifest.releasePath || dirtyInputs.length === 0) {
       assertSameTree(
         path.join(root, RELEASE_SNAPSHOT_DIR, releasePath),
@@ -385,15 +385,15 @@ function checkAssetAllowlist() {
   );
 }
 
-function checkActiveAlphaExclusions(releasePath) {
-  for (const route of activeAlphaOnlyRoutes) {
+function checkActivePrereleaseExclusions(releasePath) {
+  for (const route of activePrereleaseOnlyRoutes) {
     if (route === "/") continue;
     const relative = route.replace(/^\/|\/$/g, "");
     if (!relative) continue;
     const candidate = path.join(outDir, releasePath, relative);
     if (fs.existsSync(candidate))
       fail(
-        `active-alpha route included in release snapshot: ${releasePath}/${relative}`,
+        `active-prerelease route included in release snapshot: ${releasePath}/${relative}`,
       );
   }
 }
@@ -834,13 +834,21 @@ function releaseNpmInstall(version) {
 }
 
 function lockedReleaseMetadata(release) {
+  const activeRoutesMetadata =
+    "activePrereleaseOnlyRoutes" in release
+      ? {
+          activePrereleaseOnlyRoutes: release.activePrereleaseOnlyRoutes,
+        }
+      : {
+          activeAlphaOnlyRoutes: release.activeAlphaOnlyRoutes,
+        };
   return {
     version: release.version,
     sourceState: "locked",
     dirtyInputs: [],
     contentLock: release.contentLock,
     snapshotScope: release.snapshotScope,
-    activeAlphaOnlyRoutes: release.activeAlphaOnlyRoutes,
+    ...activeRoutesMetadata,
     unversionedRoutes: release.unversionedRoutes,
     npmInstall: release.npmInstall,
     artifacts: release.artifacts,
