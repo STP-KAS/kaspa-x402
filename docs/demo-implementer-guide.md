@@ -3,9 +3,8 @@
 Status: v1 RC1 release candidate, Testnet-10 only. The hosted gateway is an
 integration target, not a production or mainnet service.
 
-This guide describes the v1 RC1 candidate source and planned public-gateway
-cutover. The public registry and gateway remain Alpha.10 until the v1 RC1
-release and funded canaries are completed.
+This guide describes the published v1 RC1 source and deployed public gateway.
+The npm `rc` tag and `demo.kaspa-x402.org` both serve `1.0.0-rc.1`.
 
 v1 RC1 uses `kaspa-escrow-v3` / `kaspa-x402-escrow-v4` for batch settlement.
 The exact profiles are unchanged. Older alpha snapshots are historical artifacts
@@ -27,18 +26,16 @@ Useful entry points:
 - gateway docs: `https://kaspa-x402.org/docs/testnet-gateway/`;
 - gateway base URL: `https://demo.kaspa-x402.org`.
 
-Before publication, use a clean checkout or locally packed v1 RC1 tarballs.
-After v1 RC1 is published, install the exact prerelease explicitly:
+Install the current recommended Testnet release explicitly:
 
 ```sh
 npm install @kaspa-x402/core@1.0.0-rc.1 @kaspa-x402/client@1.0.0-rc.1
 ```
 
-The registry `latest` and `alpha` tags currently resolve to Alpha.10. After
-publication, use `@rc` or exact version `1.0.0-rc.1`; do not use `latest` as an
-RC input. v1 RC1 remains prerelease software and does not imply a
-stable API, frozen wire format, or mainnet readiness. The hosted gateway package
-is not published.
+Use `@rc` or exact version `1.0.0-rc.1`; `@rc` is the npm channel for release
+candidates. v1 RC1 remains prerelease software and does not imply a stable API,
+frozen wire format, or mainnet readiness. The hosted gateway package is not
+published.
 
 ## Validate Schemas And Vectors
 
@@ -64,9 +61,8 @@ transaction-specific mass and reserve analysis.
 curl -fsS https://demo.kaspa-x402.org/supported
 ```
 
-Do not submit a v1 RC1 payment until the response advertises the expected
-v1 RC1 release and capability. The public gateway is expected to remain on
-Alpha.10 until the clean cutover completes:
+Before submitting a v1 RC1 payment, confirm the response advertises the
+expected release and capability. The current public gateway advertises:
 
 - `network: "kaspa:testnet-10"`;
 - `asset: "KAS"`;

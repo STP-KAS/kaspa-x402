@@ -1,20 +1,20 @@
 # Testnet Gateway
 
-Status: v1 RC1 deployment candidate on `kaspa:testnet-10`; funded deployment
-proof is pending.
+Status: v1 RC1 is live on `kaspa:testnet-10` as the current recommended Testnet
+release, with funded deployment and fresh-state release evidence recorded.
 
 The hosted gateway is a public integration target for implementers exercising
 the Kaspa x402 wire flow against a real server. It is not a wallet, custodian,
 mainnet service, or availability commitment.
 
-The v1 RC1 candidate uses `kaspa-exact-v2` with the default
+The deployed v1 RC1 gateway uses `kaspa-exact-v2` with the default
 `standard-native` profile and also supports `batch-settlement`. The optional
 `additive` exact profile is implemented but is advertised only when a current
 KIP-10 head is available.
 
 Historical gateway evidence remains available in the immutable
-[release snapshots](/releases/). This page separates the v1 RC1 candidate
-from historical deployment evidence.
+[release snapshots](/releases/). This page separates the current v1 RC1
+deployment from historical evidence.
 
 ## Base URL
 
@@ -24,28 +24,50 @@ https://demo.kaspa-x402.org
 
 ## Endpoints
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/` | JSON endpoint index. |
-| `GET` | `/health` | Shallow configuration and process health; no upstream calls or endpoint URLs. |
-| `GET` | `/canary` | Enabled state and latest scheduled canary report. |
-| `GET` | `/supported` | Supported x402 schemes and profiles. |
-| `GET` | `/exact`, `/exact/report` | Protected exact-payment resources. |
-| `GET` | `/batch`, `/batch/report` | Protected batch-settlement resources. |
-| `GET` | `/metrics` | Coarse operational counters. |
+| Method | Path                      | Purpose                                                                       |
+| ------ | ------------------------- | ----------------------------------------------------------------------------- |
+| `GET`  | `/`                       | JSON endpoint index.                                                          |
+| `GET`  | `/health`                 | Shallow configuration and process health; no upstream calls or endpoint URLs. |
+| `GET`  | `/canary`                 | Enabled state and latest scheduled canary report.                             |
+| `GET`  | `/supported`              | Supported x402 schemes and profiles.                                          |
+| `GET`  | `/exact`, `/exact/report` | Protected exact-payment resources.                                            |
+| `GET`  | `/batch`, `/batch/report` | Protected batch-settlement resources.                                         |
+| `GET`  | `/metrics`                | Coarse operational counters.                                                  |
 
 `HEAD` follows the same payment behavior as `GET` without a response body.
 `OPTIONS` returns the CORS preflight response.
 
 Additive-head administration is operator-only:
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/admin/exact-heads` | Return head statistics and records. |
-| `POST` | `/admin/exact-heads/register` | Register funded KIP-10 head terms. |
+| Method | Path                           | Purpose                                                        |
+| ------ | ------------------------------ | -------------------------------------------------------------- |
+| `GET`  | `/admin/exact-heads`           | Return head statistics and records.                            |
+| `POST` | `/admin/exact-heads/register`  | Register funded KIP-10 head terms.                             |
 | `POST` | `/admin/exact-heads/reconcile` | Prove accepted successor lineage and restore the current head. |
 
 These routes require a bearer token stored as a Worker secret.
+
+## Current Deployment Evidence
+
+The current gateway deployment is Worker version
+`f9ef62e0-17b4-45c4-8765-e3c1789efb99`, built from tagged commit
+`040b1ec8335abadbb3c69cf1ea720ae45816b0f7` with fresh
+`demo-gateway-v1.0.0-rc.1` durable state.
+
+- `/health` reports enabled v1 RC1 `standard-native` exact settlement with PNN
+  broadcasting;
+- the scheduled canary passes the TN10 REST, immutable snapshot, schema, docs,
+  exact-offer, batch-offer, and unsupported-scheme checks;
+- funded exact transaction
+  `a502fc42046dd18b8ac7712e9b13ebe90f70c9d5094a86a73c4300e625943575`
+  settled at accepted finality;
+- its identical retry returned the stored HTTP `200` settlement, while
+  cross-resource reuse returned HTTP `409`; and
+- the separate fresh-state funded release run completed all 18 required exact
+  and batch flows against the exact RC source, including hosted batch deposit,
+  voucher, and idempotent-retry validation.
+
+This is bounded Testnet evidence, not a production or mainnet-readiness claim.
 
 ## Current Payment Terms
 
@@ -67,7 +89,7 @@ mass depends on the complete transaction shape. The reference Worker uses
 `10000000` sompi as a conservative application policy for on-chain outputs,
 including the advertised batch successor reserve.
 
-The v1 RC1 candidate Worker emits batch offers with binding `kaspa-escrow-v3`, template
+The v1 RC1 Worker emits batch offers with binding `kaspa-escrow-v3`, template
 `kaspa-x402-escrow-v4`, and a `10000000` sompi claim reserve. Its exact offers
 carry binding `kaspa-exact-v2` and an explicit profile:
 
