@@ -510,6 +510,7 @@ describe("gateway canary", () => {
       KASPA_X402_PNN_ENDPOINTS:
         "wss://vector-10.kaspa.green/kaspa/testnet-10/wrpc/json",
     };
+    stubCanaryFetches();
 
     let supported = await requestJson(env, "/supported");
     expect(
