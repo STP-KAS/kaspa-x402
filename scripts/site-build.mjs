@@ -70,7 +70,7 @@ const dirtyInputs = dirtyPublishableInputs();
 const sourceState = dirtyInputs.length > 0 ? "working-tree-dirty" : "git-head";
 const releaseSnapshotScope =
   "schemas, specs, covenant artifacts, selected docs, vectors, package metadata, and release metadata";
-const activeAlphaOnlyRoutes = [
+const activePrereleaseOnlyRoutes = [
   "/",
   "/demo/",
   "/assets/",
@@ -821,7 +821,7 @@ function releaseMetadata(releaseLock, releaseArtifacts, releaseProvenance) {
     ...releaseProvenance,
     contentLock: releaseLock?.path,
     snapshotScope: releaseSnapshotScope,
-    activeAlphaOnlyRoutes,
+    activePrereleaseOnlyRoutes,
     unversionedRoutes:
       "active prerelease; not part of the immutable release snapshot",
     npmInstall: releaseNpmInstall(),
@@ -852,7 +852,7 @@ function writeManifest(copiedArtifacts, vectorIndex) {
     sourceState,
     dirtyInputs,
     releaseSnapshotScope,
-    activeAlphaOnlyRoutes,
+    activePrereleaseOnlyRoutes,
     releaseVersion,
     releasePath,
     releases: releaseEntries.map((entry) => ({
