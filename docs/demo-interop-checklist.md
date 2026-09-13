@@ -1,24 +1,23 @@
 # Demo Interoperability Checklist
 
-Status: external-style readiness checklist for the public alpha demo surface.
-v1 RC1 candidate reviewed on 2026-08-27. Hosted Alpha.10 evidence last
-reviewed on 2026-08-10.
+Status: external-style readiness checklist for the current v1 RC1 Testnet
+surface, updated after the 2026-09-13 release and gateway cutover.
 
 This checklist is written from the perspective of an implementer arriving at
 the site without repository context.
 
 ## Findings
 
-| Question                                                  | Result                                                                                                                                                                                                                                     |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Can a reader find the canonical schemas?                  | Yes. `/schemas/` lists every schema with a purpose note and hash.                                                                                                                                                                          |
-| Can a reader find the supported schemes and networks?     | Yes. The homepage, specs, and gateway docs state `exact`, `batch-settlement`, `kaspa:testnet-10`, and `KAS`.                                                                                                                               |
-| Can a reader run fixture validation?                      | Yes. `/vectors/` groups fixtures by directory and `npm run validate:schemas` validates committed fixtures locally.                                                                                                                         |
-| Can a reader hit a real endpoint?                         | Yes. `https://demo.kaspa-x402.org` exposes `/health`, `/canary`, `/supported`, `/exact`, and `/batch` from the paid-canary-proven Alpha.10 Worker. v1 RC1 deployment proof is pending.                                                    |
-| Does the endpoint advertise current payable terms?        | Yes, for Alpha.10. The v1 RC1 candidate uses `kaspa-escrow-v3` with `kaspa-x402-escrow-v4`, but implementers must not treat the public endpoint as v1 RC1 until its cutover is recorded.                                                |
-| Does the endpoint publish operational status?             | Yes. `/health` is a shallow, non-amplifying liveness check; `/metrics` exposes counters and `/canary` exposes the stored upstream/release checks after the scheduled job has run. |
-| Does the public material imply mainnet readiness?         | No. The site and gateway docs frame the deployment as alpha and `kaspa:testnet-10` only.                                                                                                                                                   |
-| Does the site publish internal planning or review drafts? | No. The site checker blocks ignored planning files, review files, and private announcement drafts.                                                                                                                                         |
+| Question                                                  | Result                                                                                                                                                                                                                                             |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Can a reader find the canonical schemas?                  | Yes. `/schemas/` lists every schema with a purpose note and hash.                                                                                                                                                                                  |
+| Can a reader find the supported schemes and networks?     | Yes. The homepage, specs, and gateway docs state `exact`, `batch-settlement`, `kaspa:testnet-10`, and `KAS`.                                                                                                                                       |
+| Can a reader run fixture validation?                      | Yes. `/vectors/` groups fixtures by directory and `npm run validate:schemas` validates committed fixtures locally.                                                                                                                                 |
+| Can a reader hit a real endpoint?                         | Yes. `https://demo.kaspa-x402.org` exposes `/health`, `/canary`, `/supported`, `/exact`, and `/batch` from the v1 RC1 Worker. The deployed exact path has funded canary evidence, and the exact RC source completed fresh funded batch validation. |
+| Does the endpoint advertise current payable terms?        | Yes. The gateway advertises `1.0.0-rc.1`, `kaspa-escrow-v3`, and `kaspa-x402-escrow-v4` on `kaspa:testnet-10`.                                                                                                                                     |
+| Does the endpoint publish operational status?             | Yes. `/health` is a shallow, non-amplifying liveness check; `/metrics` exposes counters and `/canary` exposes the stored upstream/release checks after the scheduled job has run.                                                                  |
+| Does the public material imply mainnet readiness?         | No. The site and gateway docs frame the deployment as a release candidate and `kaspa:testnet-10` only.                                                                                                                                             |
+| Does the site publish internal planning or review drafts? | No. The site checker blocks ignored planning files, review files, and private announcement drafts.                                                                                                                                                 |
 
 ## Manual Checks
 
@@ -43,13 +42,13 @@ Recommended external manual checks:
   lineage continuity; the static browser demo uses PNN/WASM for client-side
   connectivity checks.
 - Claim broadcasting is disabled in the hosted gateway.
-- Durable state is alpha operational state and may be reset after an incident
+- Durable state is prerelease operational state and may be reset after an incident
   with disclosure.
 - Mainnet remains blocked by the documented gates.
 
 ## Acceptance Verdict
 
-The v1 RC1 candidate schemas and vectors are suitable for local alpha review.
-The paid-canary-proven hosted deployment remains Alpha.10 and is not v1 RC1
-interoperability evidence. Neither surface is suitable for mainnet funds,
-production use, or unreviewed third-party custody patterns.
+The v1 RC1 schemas, vectors, packages, and hosted deployment are suitable for
+Testnet interoperability review. The current gateway provides v1 RC1 deployment
+evidence. Neither surface is suitable for mainnet funds, production use, or
+unreviewed third-party custody patterns.
