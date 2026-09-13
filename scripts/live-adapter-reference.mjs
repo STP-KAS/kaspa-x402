@@ -2013,13 +2013,17 @@ async function runHostedBatchCanary(input) {
     voucher.settlement,
   );
 
-  const stale = await submitHostedBatchPayment(
+  const duplicate = await submitHostedBatchPayment(
     batchUrl,
     deposit.payment.paymentPayload,
-    402,
+    200,
   );
-  if (stale.body?.error !== "invalid_payment_requirements")
-    throw new Error("hosted batch stale replay was not corrective");
+  const duplicateHeader = duplicate.headers.get(PAYMENT_RESPONSE_HEADER);
+  if (!duplicateHeader)
+    throw new Error("hosted batch duplicate is missing settlement");
+  const duplicateSettlement = decodePaymentResponseHeader(duplicateHeader);
+  if (duplicateSettlement.transaction !== deposit.settlement.transaction)
+    throw new Error("hosted batch duplicate did not reuse settlement");
   input.batchRecovery.clientStore = input.clientStore;
 
   return {
@@ -2038,9 +2042,9 @@ async function runHostedBatchCanary(input) {
       openedChannel: false,
       chargedCumulativeAmount: voucherChannel.channel.chargedCumulativeAmount,
     },
-    staleReplay: {
-      status: stale.status,
-      error: stale.body.error,
+    duplicateReplay: {
+      status: duplicate.status,
+      transactionId: duplicateSettlement.transaction,
     },
   };
 }
