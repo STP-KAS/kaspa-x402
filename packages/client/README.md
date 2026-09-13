@@ -77,7 +77,9 @@ or proven absence.
 Genesis and top-up are prepare-then-broadcast transitions. The funding provider
 must implement `prepareEscrowDeposit` and `prepareEscrowTopUp` without sending:
 each method returns the exact signed transaction byte hex, its deterministic
-transaction id, and the intended singleton covenant successor.
+transaction id, every consumed input outpoint, and the intended singleton
+covenant successor. Conflict-based absence evidence releases the reservation
+only when it names one of those persisted signed inputs.
 
 Before `sendTransaction`, the client durably reserves that artifact through
 `ChannelStore.claimFundingTransitionAttempt`. A genesis attempt is keyed by its

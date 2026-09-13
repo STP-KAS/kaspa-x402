@@ -2685,6 +2685,9 @@ function makeFundingProvider(input) {
       return {
         transaction: genesis.artifact.serializedTransaction,
         transactionId: genesis.artifact.transactionId,
+        inputOutpoints: genesis.artifact.transaction.inputs.map((input) =>
+          structuredClone(input.previousOutpoint),
+        ),
         successor: genesis.successor,
         fundingSource: "hot-wallet",
       };
@@ -2709,6 +2712,9 @@ function makeFundingProvider(input) {
       return {
         transaction: topUp.artifact.serializedTransaction,
         transactionId: topUp.artifact.transactionId,
+        inputOutpoints: topUp.artifact.transaction.inputs.map((input) =>
+          structuredClone(input.previousOutpoint),
+        ),
         successor: topUp.successor,
         fundingSource: "hot-wallet",
       };

@@ -748,7 +748,7 @@ export class DirectModeClient {
       attempt.transactionId,
       attempt.requiredConfirmations,
       "broadcast refund",
-      attempt.activeOutpoint,
+      [attempt.activeOutpoint],
     );
     if (decision.status === "absent") {
       await this.#options.store.releaseRefundAttempt(
@@ -844,7 +844,7 @@ export class DirectModeClient {
       attempt.transactionId,
       attempt.requiredConfirmations,
       "reconciled refund",
-      attempt.activeOutpoint,
+      [attempt.activeOutpoint],
     );
     if (decision.status === "unknown" || decision.status === "accepted") {
       return {
@@ -930,6 +930,7 @@ export class DirectModeClient {
       attempt.transactionId,
       attempt.requiredConfirmations,
       "reconciled funding",
+      attempt.inputOutpoints,
     );
     if (decision.status === "unknown" || decision.status === "accepted") {
       return fundingTransitionResult(attempt, decision.status, false);
@@ -1149,6 +1150,9 @@ export class DirectModeClient {
       expectedChannel: channel,
       transaction: prepared.transaction,
       transactionId: prepared.transactionId,
+      inputOutpoints: prepared.inputOutpoints.map((outpoint) => ({
+        ...outpoint,
+      })),
       intendedSuccessor: prepared.successor,
       fundingSource:
         prepared.fundingSource ?? this.#options.fundingProvider.sourceKind,
@@ -1291,6 +1295,9 @@ export class DirectModeClient {
       },
       transaction: prepared.transaction,
       transactionId: prepared.transactionId,
+      inputOutpoints: prepared.inputOutpoints.map((outpoint) => ({
+        ...outpoint,
+      })),
       intendedSuccessor: prepared.successor,
       fundingSource:
         prepared.fundingSource ?? this.#options.fundingProvider.sourceKind,
@@ -1909,6 +1916,7 @@ export class DirectModeClient {
       attempt.transactionId,
       attempt.requiredConfirmations,
       "broadcast funding",
+      attempt.inputOutpoints,
     );
     if (decision.status === "absent") {
       await this.#options.store.releaseFundingTransitionAttempt(
@@ -1975,6 +1983,7 @@ export class DirectModeClient {
     const prepared = {
       transaction: attempt.transaction,
       transactionId: attempt.transactionId,
+      inputOutpoints: attempt.inputOutpoints,
       successor: attempt.intendedSuccessor,
       fundingSource: attempt.fundingSource,
     };
@@ -2396,18 +2405,19 @@ function trustedChainEvidenceDecision(
   transactionId: string,
   requiredConfirmations: number,
   label: string,
-  expectedSpentOutpoint?: FundingOutpoint,
+  expectedSpentOutpoints?: readonly FundingOutpoint[],
 ): ReturnType<typeof decideChainEvidence> {
   assertEvidenceTransaction(evidence, transactionId, label);
   try {
     const decision = decideChainEvidence(evidence!, requiredConfirmations);
+    const proof =
+      decision.status === "absent" ? decision.evidence.proof : undefined;
     if (
       decision.status === "absent" &&
-      expectedSpentOutpoint &&
-      decision.evidence.proof.kind === "confirmed-conflicting-spend" &&
-      !sameOutpoint(
-        decision.evidence.proof.spentOutpoint,
-        expectedSpentOutpoint,
+      expectedSpentOutpoints &&
+      proof?.kind === "confirmed-conflicting-spend" &&
+      !expectedSpentOutpoints.some((outpoint) =>
+        sameOutpoint(proof.spentOutpoint, outpoint),
       )
     ) {
       return {
@@ -2416,7 +2426,7 @@ function trustedChainEvidenceDecision(
           status: "unknown",
           transactionId: decision.evidence.transactionId,
           reason: `${label} conflicting spend is not bound to the reserved outpoint`,
-          checkpoint: decision.evidence.proof.conflictingTransaction.checkpoint,
+          checkpoint: proof.conflictingTransaction.checkpoint,
         },
       };
     }
@@ -2473,6 +2483,7 @@ function assertPreparedFundingTransition(
   prepared: {
     transaction: string;
     transactionId: string;
+    inputOutpoints: readonly FundingOutpoint[];
     successor: {
       outpoint: FundingOutpoint;
       covenantId: string;
@@ -2493,6 +2504,32 @@ function assertPreparedFundingTransition(
     );
   }
   assertTransactionId(prepared.transactionId, `prepared ${kind}`);
+  if (!Array.isArray(prepared.inputOutpoints)) {
+    throw new KaspaX402Error(
+      "invalid_kaspa_outpoint",
+      `prepared ${kind} must identify each unique signed transaction input`,
+    );
+  }
+  const uniqueInputs = new Set(
+    prepared.inputOutpoints.map(
+      (outpoint) => `${outpoint.txid.toLowerCase()}:${outpoint.index}`,
+    ),
+  );
+  if (
+    prepared.inputOutpoints.length === 0 ||
+    uniqueInputs.size !== prepared.inputOutpoints.length ||
+    prepared.inputOutpoints.some(
+      (outpoint) =>
+        !/^[0-9a-f]{64}$/i.test(outpoint.txid) ||
+        !Number.isSafeInteger(outpoint.index) ||
+        outpoint.index < 0,
+    )
+  ) {
+    throw new KaspaX402Error(
+      "invalid_kaspa_outpoint",
+      `prepared ${kind} must identify each unique signed transaction input`,
+    );
+  }
   assertTransactionId(
     prepared.successor.outpoint.txid,
     `prepared ${kind} successor`,

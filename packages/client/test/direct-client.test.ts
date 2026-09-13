@@ -1956,6 +1956,58 @@ describe("direct-mode client", () => {
     expect(provider.deposits).toHaveLength(2);
   });
 
+  it("releases a funding transition only when a conflict spends its signed input", async () => {
+    const provider = new FakeFundingProvider();
+    provider.fundingSendFinality = "broadcast";
+    const store = new MemoryChannelStore();
+    let spentOutpoint = { txid: "96".repeat(32), index: 7 };
+    const client = makeClient({
+      provider,
+      store,
+      fundingTransitionReconciler: {
+        async reconcileFundingTransition(attempt) {
+          return {
+            transactionId: attempt.transactionId,
+            evidence: {
+              status: "absent",
+              transactionId: attempt.transactionId,
+              reason: "conflicting spend",
+              proof: {
+                kind: "confirmed-conflicting-spend",
+                spentOutpoint,
+                conflictingTransaction: acceptedEvidence("95".repeat(32)),
+              },
+            },
+          };
+        },
+      },
+    });
+
+    await expect(
+      client.createPayment(
+        encodePaymentRequiredHeader(makeRequired({ amount: "100" })),
+        { url: "https://api.example.test/data" },
+      ),
+    ).rejects.toThrow("confirmation threshold");
+    const channelId = provider.deposits[0]!.channelId;
+    const attempt = await store.loadFundingTransitionAttempt(channelId);
+
+    await expect(
+      client.reconcileFundingTransition(channelId),
+    ).resolves.toMatchObject({ finality: "unknown", accepted: false });
+    await expect(
+      store.loadFundingTransitionAttempt(channelId),
+    ).resolves.toBeDefined();
+
+    spentOutpoint = { ...attempt!.inputOutpoints[0]! };
+    await expect(
+      client.reconcileFundingTransition(channelId),
+    ).resolves.toMatchObject({ finality: "absent", accepted: false });
+    await expect(
+      store.loadFundingTransitionAttempt(channelId),
+    ).resolves.toBeUndefined();
+  });
+
   it("rejects accepted genesis evidence when the funding transaction has another output", async () => {
     const provider = new FakeFundingProvider();
     provider.genesisTotalOutputCount = 2;
@@ -4558,6 +4610,7 @@ class FakeFundingProvider implements FundingProvider {
       return {
         transaction: "ad".repeat(32),
         transactionId: FUNDING_TX,
+        inputOutpoints: [{ txid: "79".repeat(32), index: 0 }],
         successor: {
           ...successor,
           outpoint: { txid: "56".repeat(32), index: 10 },
@@ -4572,6 +4625,7 @@ class FakeFundingProvider implements FundingProvider {
     return {
       transaction: "ad".repeat(32),
       transactionId: FUNDING_TX,
+      inputOutpoints: [{ txid: "79".repeat(32), index: 0 }],
       successor,
       fundingSource: this.sourceKind,
     };
@@ -4693,6 +4747,7 @@ class FakeFundingProvider implements FundingProvider {
     return {
       transaction: "ae".repeat(32),
       transactionId: outpoint.txid,
+      inputOutpoints: [request.channel.activeOutpoint],
       successor,
       fundingSource: this.sourceKind,
     };

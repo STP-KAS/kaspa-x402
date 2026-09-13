@@ -1086,7 +1086,7 @@ describe("gateway durable ledger", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("compacts terminal responses without evicting replay tombstones", async () => {
+  it("retains replay tombstones without exhausting active record capacity", async () => {
     let now = 0;
     const ledger = new GatewayLedger(new FakeStorage(), {
       limits: {
@@ -1123,13 +1123,86 @@ describe("gateway durable ledger", () => {
           head: undefined,
         }),
       ),
-    ).rejects.toThrow("record limit exceeded");
+    ).resolves.toMatchObject({ created: true });
     await expect(ledger.loadExactPayment(TX)).resolves.toMatchObject({
       response: {
         status: 409,
         body: { error: "replay_record_retained" },
       },
     });
+    await expect(
+      ledger.loadExactSettlementAttempt(TX),
+    ).resolves.toBeUndefined();
+  });
+
+  it("migrates a compacted quota row beyond the first 128 active rows", async () => {
+    const storage = new FakeStorage();
+    for (let index = 0; index < 128; index += 1) {
+      const transactionId = index.toString(16).padStart(64, "0");
+      const key = `exact:${transactionId}`;
+      await storage.put(`durable-budget:record:${key}`, {
+        key,
+        kind: "exact",
+        attemptId: transactionId,
+        payerId: `active-${index}`,
+        bytes: 1,
+      });
+    }
+    const legacyTransactionId = "ff".repeat(32);
+    const legacyKey = `exact:${legacyTransactionId}`;
+    const replay = {
+      transactionId: legacyTransactionId,
+      response: {
+        status: 409,
+        headers: {},
+        body: { error: "replay_record_retained" },
+      },
+    };
+    await storage.put(`exact:${legacyTransactionId}`, replay);
+    await storage.put(`durable-budget:record:${legacyKey}`, {
+      key: legacyKey,
+      kind: "exact",
+      attemptId: legacyTransactionId,
+      payerId: "legacy-compacted",
+      bytes: 1,
+      terminalAt: 0,
+      compactedAt: 1,
+    });
+    await storage.put("durable-budget:meta", {
+      records: 129,
+      bytes: 129,
+      payerCounts: {},
+    });
+    const ledger = new GatewayLedger(storage, {
+      limits: {
+        maxRecords: 129,
+        maxBytes: 1024 * 1024 * 1024,
+        maxRecordsPerPayer: 129,
+        terminalRetentionMs: 100,
+      },
+      now: () => 0,
+    });
+
+    await expect(
+      ledger.claimExactSettlement(
+        exactSettlementAttempt({
+          transactionId: OTHER_TX,
+          profile: "standard-native",
+          head: undefined,
+        }),
+      ),
+    ).resolves.toMatchObject({ created: true });
+    await expect(storage.get(`durable-budget:record:${legacyKey}`)).resolves
+      .toBeUndefined();
+    await expect(storage.get(`exact:${legacyTransactionId}`)).resolves.toEqual(
+      replay,
+    );
+    await expect(storage.get("durable-budget:meta")).resolves.toMatchObject({
+      records: 129,
+    });
+    expect(
+      storage.listRequests.some((request) => request.start !== undefined),
+    ).toBe(true);
   });
 
   it("serializes lock ownership with expiring leases", async () => {

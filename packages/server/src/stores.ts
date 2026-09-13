@@ -1516,22 +1516,9 @@ export class MemoryServerChannelStore implements ServerStateStore {
             response: expiredReplayResponse(),
           });
       }
-      const bytes = durableByteLength({
-        attemptId: record.attemptId,
-        payment: this.#exactPayments.get(exactPaymentKey(record.attemptId)),
-        commitment: record.commitmentId
-          ? this.#commitments.get(record.commitmentId)
-          : undefined,
-        paymentIdentifier: record.paymentIdentifier
-          ? this.#paymentIdentifiers.get(record.paymentIdentifier)
-          : undefined,
-      });
-      this.#budgetBytes += bytes - record.bytes;
-      this.#budgetRecords.set(key, {
-        ...record,
-        bytes,
-        compactedAt: this.#now(),
-      });
+      // The compact payment/commitment records above remain authoritative
+      // replay tombstones, but no longer consume active-attempt admission.
+      this.#deleteBudgetRecord(key);
     }
   }
 }

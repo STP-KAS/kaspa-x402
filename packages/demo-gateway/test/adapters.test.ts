@@ -1285,6 +1285,49 @@ describe("KaspaPnnClient", () => {
     ).rejects.toThrow("header does not match its added-chain hash");
   });
 
+  it("bounds cumulative PNN selected-chain data across pages", async () => {
+    const current = batchChannel({});
+    const fixture = pnnLineageFixture(current);
+    let page = 0;
+    const rpc: MockPnnRpc = {
+      ...fixture.rpc,
+      async getVirtualChainFromBlockV2() {
+        page += 1;
+        const blockHash = page.toString(16).padStart(64, "0");
+        return {
+          removedChainBlockHashes: [],
+          addedChainBlockHashes: [blockHash],
+          chainBlockAcceptedTransactions: [
+            {
+              chainBlockHeader: {
+                hash: blockHash,
+                blueScore: "1071",
+                daaScore: "1071",
+                padding: "x".repeat(320 * 1024),
+              },
+              acceptedTransactions: [],
+            },
+          ],
+        };
+      },
+    };
+
+    await expect(
+      new KaspaPnnClient({
+        endpoints: ["wss://pnn-a.example.test/kaspa/testnet-10/wrpc/json"],
+        timeoutMs: 50,
+        rpcFactory: mockPnnRpcFactory(() => rpc),
+      }).discoverCovenantLineage({
+        network: "kaspa:testnet-10",
+        covenantId: current.covenantId,
+        templateId: current.channelConfig.templateId,
+        lineage: current.lineage,
+        minConfirmationCount: 30,
+      }),
+    ).rejects.toThrow("cumulative byte limit");
+    expect(page).toBeGreaterThan(1);
+  });
+
   it("rejects PNN endpoints on the wrong network", async () => {
     const rpcFactory = mockPnnRpcFactory(() => ({
       async connect() {},

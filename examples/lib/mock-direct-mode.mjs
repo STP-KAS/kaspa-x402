@@ -393,6 +393,7 @@ class MockFundingProvider {
     return {
       transaction,
       transactionId,
+      inputOutpoints: [authorizingInput],
       successor: {
         outpoint,
         covenantId,
@@ -460,6 +461,7 @@ class MockFundingProvider {
     return {
       transaction,
       transactionId,
+      inputOutpoints: [previous.activeOutpoint],
       successor: {
         outpoint,
         covenantId: previous.covenantId,

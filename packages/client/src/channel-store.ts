@@ -10,6 +10,7 @@ import {
   type AcceptedTransactionEvidence,
   type CovenantLaunchManifest,
   type CovenantLineageState,
+  type FundingOutpoint,
 } from "@kaspa-x402/core";
 import { ESCROW_V4_LAUNCH_IDENTITY } from "@kaspa-x402/covenant";
 import type {
@@ -999,9 +1000,23 @@ function persistedFundingAttemptMatchesChannel(
 function fundingAttemptArtifactIsConsistent(
   attempt: FundingTransitionAttemptRecord,
 ): boolean {
+  if (!Array.isArray(attempt.inputOutpoints)) return false;
+  const uniqueInputs = new Set(
+    attempt.inputOutpoints.map(
+      (outpoint) => `${outpoint.txid.toLowerCase()}:${outpoint.index}`,
+    ),
+  );
   return (
     Number.isSafeInteger(attempt.requiredConfirmations) &&
     attempt.requiredConfirmations > 0 &&
+    attempt.inputOutpoints.length > 0 &&
+    uniqueInputs.size === attempt.inputOutpoints.length &&
+    attempt.inputOutpoints.every(
+      (outpoint) =>
+        /^[0-9a-f]{64}$/i.test(outpoint.txid) &&
+        Number.isSafeInteger(outpoint.index) &&
+        outpoint.index >= 0,
+    ) &&
     sameHex(attempt.channelId, fundingAttemptChannelId(attempt)) &&
     sameHex(attempt.transactionId, attempt.intendedSuccessor.outpoint.txid) &&
     !/^0{64}$/i.test(attempt.intendedSuccessor.covenantId) &&
@@ -1293,6 +1308,7 @@ function sameFundingArtifact(
     sameHex(left.channelId, right.channelId) &&
     sameHex(left.transaction, right.transaction) &&
     sameHex(left.transactionId, right.transactionId) &&
+    sameOutpoints(left.inputOutpoints, right.inputOutpoints) &&
     sameSuccessor(left.intendedSuccessor, right.intendedSuccessor) &&
     left.fundingSource === right.fundingSource &&
     left.requiredConfirmations === right.requiredConfirmations &&
@@ -1301,6 +1317,16 @@ function sameFundingArtifact(
         sameGenesisIntent(left.intent, right.intent)
       : right.kind === "top-up" &&
         sameChannelSnapshot(left.expectedChannel, right.expectedChannel))
+  );
+}
+
+function sameOutpoints(
+  left: readonly FundingOutpoint[],
+  right: readonly FundingOutpoint[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((outpoint, index) => sameOutpoint(outpoint, right[index]!))
   );
 }
 

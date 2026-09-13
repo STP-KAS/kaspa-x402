@@ -211,12 +211,27 @@ export async function handleFacilitatorRequest(
   return jsonResponse(404, { error: "not_found" });
 }
 
+export interface FacilitatorBodyReadOptions {
+  /** Overall stream deadline. Defaults to 10 seconds. */
+  timeoutMs?: number;
+}
+
+const DEFAULT_FACILITATOR_BODY_TIMEOUT_MS = 10_000;
+
 /** Read an embedding Request without materializing more than the shared limit. */
 export async function readFacilitatorRequestBody(request: {
   body: ReadableStream<Uint8Array> | null;
   headers: { get(name: string): string | null };
-}): Promise<unknown> {
+  signal?: AbortSignal;
+}, options: FacilitatorBodyReadOptions = {}): Promise<unknown> {
   const maximum = KASPA_X402_RESOURCE_BUDGET.maxDecodedHeaderBytes;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_FACILITATOR_BODY_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new KaspaX402Error(
+      "invalid_kaspa_x402_payload",
+      "facilitator request body timeout must be a positive safe integer",
+    );
+  }
   const declared = request.headers.get("content-length");
   if (
     declared !== null &&
@@ -234,18 +249,54 @@ export async function readFacilitatorRequestBody(request: {
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let bytes = 0;
-  while (true) {
-    const chunk = await reader.read();
-    if (chunk.done) break;
-    bytes += chunk.value.byteLength;
-    if (bytes > maximum) {
-      await reader.cancel();
-      throw new KaspaX402Error(
-        "invalid_kaspa_x402_payload",
-        `facilitator request body exceeds decoded limit ${maximum} bytes`,
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let abortHandler: (() => void) | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(
+        new KaspaX402Error(
+          "invalid_kaspa_x402_payload",
+          `facilitator request body timed out after ${timeoutMs}ms`,
+        ),
       );
+    }, timeoutMs);
+  });
+  const aborted = new Promise<never>((_, reject) => {
+    abortHandler = () => {
+      reject(
+        new KaspaX402Error(
+          "invalid_kaspa_x402_payload",
+          "facilitator request body was aborted",
+        ),
+      );
+    };
+    if (request.signal?.aborted) abortHandler();
+    else request.signal?.addEventListener("abort", abortHandler, { once: true });
+  });
+  try {
+    while (true) {
+      const chunk = await Promise.race([reader.read(), deadline, aborted]);
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > maximum) {
+        throw new KaspaX402Error(
+          "invalid_kaspa_x402_payload",
+          `facilitator request body exceeds decoded limit ${maximum} bytes`,
+        );
+      }
+      chunks.push(chunk.value);
     }
-    chunks.push(chunk.value);
+  } catch (error) {
+    void reader.cancel(error).catch(() => undefined);
+    throw error;
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    if (abortHandler) request.signal?.removeEventListener("abort", abortHandler);
+    try {
+      reader.releaseLock();
+    } catch {
+      // Cancellation still owns a pending read; the stream will release it.
+    }
   }
   const raw = new Uint8Array(bytes);
   let offset = 0;
