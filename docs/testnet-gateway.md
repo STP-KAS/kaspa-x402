@@ -1,19 +1,19 @@
 # Testnet Gateway
 
-Status: Alpha.11 deployment candidate on `kaspa:testnet-10`; funded deployment
+Status: v1 RC1 deployment candidate on `kaspa:testnet-10`; funded deployment
 proof is pending.
 
 The hosted gateway is a public integration target for implementers exercising
 the Kaspa x402 wire flow against a real server. It is not a wallet, custodian,
 mainnet service, or availability commitment.
 
-The Alpha.11 candidate uses `kaspa-exact-v2` with the default
+The v1 RC1 candidate uses `kaspa-exact-v2` with the default
 `standard-native` profile and also supports `batch-settlement`. The optional
 `additive` exact profile is implemented but is advertised only when a current
 KIP-10 head is available.
 
 Historical gateway evidence remains available in the immutable
-[release snapshots](/releases/). This page separates the Alpha.11 candidate
+[release snapshots](/releases/). This page separates the v1 RC1 candidate
 from historical deployment evidence.
 
 ## Base URL
@@ -67,7 +67,7 @@ mass depends on the complete transaction shape. The reference Worker uses
 `10000000` sompi as a conservative application policy for on-chain outputs,
 including the advertised batch successor reserve.
 
-The Alpha.11 candidate Worker emits batch offers with binding `kaspa-escrow-v3`, template
+The v1 RC1 candidate Worker emits batch offers with binding `kaspa-escrow-v3`, template
 `kaspa-x402-escrow-v4`, and a `10000000` sompi claim reserve. Its exact offers
 carry binding `kaspa-exact-v2` and an explicit profile:
 
@@ -189,9 +189,9 @@ The 2026-08-10 Alpha.10 deployment completed funded exact and batch runs:
 - the scheduled canary passed TN10 REST, release-snapshot, schema, docs, offer,
   and unsupported-scheme checks.
 
-This evidence predates the Alpha.11 alias controls, fresh
-`demo-gateway-alpha.11` state, and `kaspa-x402-escrow-v4` template. It must not
-be used as Alpha.11 deployment or funded-canary proof.
+This evidence predates the v1 RC1 alias controls, fresh
+`demo-gateway-v1.0.0-rc.1` state, and `kaspa-x402-escrow-v4` template. It must not
+be used as v1 RC1 deployment or funded-canary proof.
 
 ## Testnet Funding
 

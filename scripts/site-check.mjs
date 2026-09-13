@@ -469,7 +469,7 @@ function checkContent() {
     assertContains(
       path.join(outDir, relative),
       "funded deployment proof is pending",
-      `${relative} Alpha.11 pending deployment proof`,
+      `${relative} v1 RC1 pending deployment proof`,
     );
   }
   assertContains(
@@ -479,11 +479,11 @@ function checkContent() {
   );
   assertContains(
     path.join(outDir, "docs/testnet-gateway.md"),
-    "Status: Alpha.11 deployment candidate",
-    "docs/testnet-gateway.md Alpha.11 pending deployment proof",
+    "Status: v1 RC1 deployment candidate",
+    "docs/testnet-gateway.md v1 RC1 pending deployment proof",
   );
   for (const [relative, marker] of [
-    ["docs/live-testnet-report.md", "successful `0.1.0-alpha.11` funded live harness run"],
+    ["docs/live-testnet-report.md", "successful `1.0.0-rc.1` funded live harness run"],
     ["docs/demo-implementer-guide.md", "public registry and gateway remain Alpha.10"],
   ]) {
     assertContains(
@@ -493,8 +493,8 @@ function checkContent() {
     );
   }
   for (const [relative, marker] of [
-    ["docs/alpha-publish.md", "is a local release candidate"],
-    ["docs/demo-interop-checklist.md", "Alpha.11 deployment proof is pending"],
+    ["docs/release-publish.md", "is a local release candidate"],
+    ["docs/demo-interop-checklist.md", "v1 RC1 deployment proof is pending"],
   ]) {
     assertContains(
       path.join(root, relative),
@@ -520,7 +520,7 @@ function checkContent() {
   assertContains(
     path.join(outDir, "demo/index.html"),
     "Current Lane And Voucher",
-    "browser demo exposes Alpha.11 batch lane state",
+    "browser demo exposes v1 RC1 batch lane state",
   );
   assertContains(
     path.join(outDir, "assets/demo.js"),

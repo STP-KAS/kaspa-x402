@@ -2,7 +2,7 @@
 
 Server SDK for direct-mode Kaspa x402 payments.
 
-Status: alpha. This package targets testnet iteration and reference server
+Status: release candidate. This package targets testnet iteration and reference server
 flows; production deployments need independent review, durable storage, key
 management, and the mainnet gates in the repository docs.
 

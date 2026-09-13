@@ -1,7 +1,7 @@
 # x402 v2 Upstream Compatibility Report
 
 Status: internal pre-submission report. The upstream comparison baseline was
-checked 2026-07-08 against `x402-foundation/x402` `main`; this Alpha.11 binding
+checked 2026-07-08 against `x402-foundation/x402` `main`; this v1 RC1 binding
 update was recorded 2026-08-09. Not published on the site.
 
 Scope: line-level comparison of this repository's wire surface against the
@@ -10,7 +10,7 @@ upstream v2 specification (`specs/x402-specification-v2.md`) and transports
 
 ## Verdict
 
-The Kaspa binding remains wire-compatible with upstream x402 v2. Alpha.11
+The Kaspa binding remains wire-compatible with upstream x402 v2. v1 RC1
 leaves both exact profiles unchanged and replaces the active batch binding with
 `kaspa-escrow-v3` / `kaspa-x402-escrow-v4`. KIP-20 covenant identity, lifetime
 voucher accounting, and transaction-v1 evidence remain ecosystem-defined
@@ -70,7 +70,7 @@ cares.
 - Our two extra-sounding error codes (`invalid_transaction_state`,
   `unexpected_settle_error`) exist in the upstream v2 vocabulary.
 - Scheme-specific payload content is ecosystem-defined upstream. Kaspa exact
-  uses a signed transaction artifact; Alpha.11 batch uses stable KIP-20
+  uses a signed transaction artifact; v1 RC1 batch uses stable KIP-20
   `covenantId`, current-outpoint evidence, and cumulative voucher fields.
 - `extra.binding` identifiers (`kaspa-exact-v2`, `kaspa-escrow-v3`) and the
   `kaspa-x402-escrow-v4` template id live in scheme-defined `extra` objects,
@@ -81,8 +81,8 @@ cares.
 
 ## Alpha Snapshot Constraint
 
-Alpha.11 is a clean active-profile replacement, not a compatibility layer.
+v1 RC1 is a clean active-profile replacement, not a compatibility layer.
 Older immutable release snapshots remain available for historical
 reproducibility, but their batch bindings and stores are not accepted by the
-Alpha.11 runtime. The Alpha.11 release must create and lock a new snapshot;
+v1 RC1 runtime. The v1 RC1 release must create and lock a new snapshot;
 deployed snapshots must never be mutated in place.

@@ -4157,7 +4157,7 @@ function makeAcceptedRequirement(
   if (config.network !== "kaspa:testnet-10") {
     throw new KaspaX402Error(
       "invalid_kaspa_x402_network",
-      "batch settlement is restricted to kaspa:testnet-10 in Alpha.11",
+      "batch settlement is restricted to kaspa:testnet-10 in v1 RC1",
     );
   }
   const amount = options.amount ?? config.amount;
@@ -4695,7 +4695,7 @@ function validateChannelTerms(
   if (config.network !== "kaspa:testnet-10") {
     throw new KaspaX402Error(
       "invalid_kaspa_x402_network",
-      "batch settlement is restricted to kaspa:testnet-10 in Alpha.11",
+      "batch settlement is restricted to kaspa:testnet-10 in v1 RC1",
     );
   }
   if (

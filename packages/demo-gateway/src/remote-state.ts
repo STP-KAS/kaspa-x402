@@ -31,7 +31,7 @@ import type {
 import { GATEWAY_COORDINATION_DOMAIN } from "./state.js";
 
 export type GatewayStateNamespace = Env["GATEWAY_STATE"];
-export const GATEWAY_STATE_OBJECT_NAME = "demo-gateway-alpha.11";
+export const GATEWAY_STATE_OBJECT_NAME = "demo-gateway-v1.0.0-rc.1";
 
 export class RemoteGatewayState implements GatewayStateClient {
   readonly coordinationScope = "deployment-wide" as const;
