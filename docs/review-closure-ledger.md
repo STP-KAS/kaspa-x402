@@ -19,6 +19,21 @@ themes. It intentionally tracks the package surface that remains shipped:
 | Facilitator support must not widen server capability                                  | Fixed for current facilitator tests                   | Facilitator tests assert supported-kind intersection and explicit claim/refund settler requirements.                                                                                                                                                                                                                                                                                               |
 | Mainnet readiness must not be implied by testnet success                              | Open gate                                             | Mainnet remains blocked by `docs/mainnet-readiness.md`; `kaspa:mainnet` is a reserved profile name only.                                                                                                                                                                                                                                                                                           |
 
+## Alpha.11 Fresh Security Diff Review
+
+The executed security diff review reported nine findings. Alpha.11 closes the six
+implementation findings: expiry is checked at the handler sink (N01/N09),
+terminal attempts release active quota while retaining replay tombstones (N02),
+permanent-absence proof is bound to persisted exact funding inputs (N06), PNN
+lineage reads have cumulative traversal limits (N07), and facilitator streams
+have a whole-body deadline and cancellation (N08).
+
+N03-N05 remain an explicit Testnet-10-only limitation: the reference gateway
+trusts one configured chain-evidence source at a time. Endpoint failover is not
+independent corroboration. Mainnet remains blocked until an audited design adds
+independent corroboration or another Byzantine-resilient evidence path.
+The separately proposed final scoped deep scan remains excluded.
+
 ## Remaining Gates
 
 - independent audit of exact, batch covenant, state-store, and adapter behavior;

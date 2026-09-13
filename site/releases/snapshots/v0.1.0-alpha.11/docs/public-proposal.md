@@ -7,7 +7,7 @@ Kaspa x402 proposes native Kaspa bindings for x402 v2 payment flows. The
 current native alpha surface defines two scheme/network profiles:
 
 - `exact` for fixed-price one-shot transfers;
-- `batch-settlement` for repeated or variable-cost micropayments backed by
+- `batch-settlement` for repeated fixed-price invocations backed by
   escrow/channel state.
 
 The network strings are `kaspa:testnet-10` for alpha validation and
@@ -23,15 +23,15 @@ Kaspa payments do not all have the same settlement shape.
 `exact` is the simplest fit when the resource has a fixed price and the client
 can pay directly with a native transaction.
 
-`batch-settlement` fits repeated small requests and bounded variable-cost
-requests. A client creates one singleton KIP-20 escrow genesis and signs
-lifetime cumulative vouchers against its stable covenant ID. The server can
-make repeated partial claims, the client can top up the same lineage without
-resetting its accounting, and a timed refund terminates the lane.
+`batch-settlement` fits repeated requests whose charge is fixed and approved
+before each invocation. A client creates one singleton KIP-20 escrow genesis
+and signs lifetime cumulative vouchers against its stable covenant ID. The
+server can make repeated partial claims, the client can top up the same lineage
+without resetting its accounting, and a timed refund terminates the lane.
 
-The lane tracks A (lifetime actual charge), S (lifetime gross claimed), T
-(latest buyer-signed lifetime ceiling), V (current covenant value), and R
-(advertised minimum successor reserve). Runtimes persist the rotating current
+The lane tracks A (lifetime committed fixed charges), S (lifetime gross
+claimed), T (latest buyer-signed lifetime ceiling), V (current covenant value),
+and R (advertised minimum successor reserve). Runtimes persist the rotating current
 outpoint and recover unresolved transitions after restart; the stable covenant
 ID identifies and constrains lineage but is not a live-UTXO lookup.
 
@@ -61,6 +61,18 @@ payments without depending on a hosted facilitator. A self-hosted facilitator
 package exists for compatibility with x402-style `/supported`, `/verify`, and
 `/settle` flows, but it is optional and not part of the initial alpha package
 set.
+
+## Security And Deployment Boundary
+
+Alpha.11 is a Testnet-10 interoperability candidate, not a production or
+mainnet release. Its reference gateway trusts one configured chain-evidence
+source at a time. The core server's default controller is process-local, while
+the reference Worker adds host-level admission through a single named Durable
+Object; that cross-isolate path is not yet production load-tested. Mainnet
+remains blocked until an audited design adds independently corroborated chain
+evidence, proves distributed admission for its deployment topology, provides
+durable production stores, and closes the other gates in
+`docs/mainnet-readiness.md`.
 
 ## Evidence
 

@@ -260,8 +260,8 @@ For `batch-settlement`, a voucher-only success may have:
 
 For batch voucher-only settlement, `transaction` is the non-empty commitment
 id. Top-level `amount` and `extensions.kaspa.chargedAmount` both equal the
-selected `PaymentRequirements.amount`; batch v3 has no lower provider-local
-actual charge.
+selected `PaymentRequirements.amount`; batch v3 has no provider-local charge
+adjustment after service.
 
 For `deposit-voucher`, top-level `amount` is the accepted fixed charge.
 Escrow funding is not reported as top-level `amount`; it is reported in

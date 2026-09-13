@@ -30,7 +30,7 @@ Important non-secret variables:
 | `KASPA_X402_SERVER_PUBLIC_KEY`               | Testnet server public key advertised in batch escrow terms.                                                                                                    |
 | `KASPA_X402_EXACT_AMOUNT`                    | Exact-payment price in sompi. Must be at least `10000000`.                                                                                                     |
 | `KASPA_X402_EXACT_PROFILE`                   | Exact profile: `standard-native` (default) or optional `additive`.                                                                                             |
-| `KASPA_X402_BATCH_AMOUNT`                    | Maximum per-request Alpha.11 batch charge in sompi.                                                                                                            |
+| `KASPA_X402_BATCH_AMOUNT`                    | Fixed per-request Alpha.11 batch charge in sompi.                                                                                                              |
 | `KASPA_X402_MIN_DEPOSIT_SOMPI`               | Batch escrow deposit floor. Must be at least `10000000`.                                                                                                       |
 | `KASPA_X402_CLAIM_RESERVE_SOMPI`             | Advertised Alpha.11 minimum successor reserve R. Must be at least `10000000`; the advertised deposit floor must cover the request ceiling plus this reserve.   |
 | `KASPA_X402_REFUND_TIMEOUT_DAA_DELTA`        | Maximum DAA horizon for the persisted absolute batch timeout. The Worker rolls the timeout only at the minimum-lead boundary.                                  |

@@ -336,6 +336,12 @@ The reference adapter proves the threshold through
 selected-chain accepting block prove only a conservative lower bound of one;
 REST evidence alone cannot authorize 30-confirmation batch lineage.
 
+The Alpha.11 reference deployment trusts one configured Testnet-10 evidence
+source at a time. Multiple configured endpoints provide failover, not
+independent corroboration. Mainnet requires independently corroborated chain
+evidence or another audited Byzantine-resilient design; unavailable or
+disagreeing evidence MUST fail closed.
+
 `absent` means the exact transaction is permanently excluded by either a
 distinct confirmed spend of its input or stable consensus-rejection evidence.
 A missing index entry, UTXO observation, timeout, transport error, or pruned
@@ -361,6 +367,11 @@ extend only the restored head. Missing or ambiguous predecessors, multiple
 spends or successors, wrong covenant/template bindings, and inconsistent state
 or value changes fail closed. If pruning prevents continuity proof, the lane is
 unavailable until an authoritative complete history can be supplied.
+
+Selected-chain retrieval MUST enforce cumulative response-byte, block-count,
+and page-count limits across the complete traversal, plus a finite deadline for
+each remote operation. A limit breach or non-converging traversal fails closed;
+an implementation MUST NOT silently truncate a delta and treat it as complete.
 
 Clients and servers reconcile this lineage before lane reuse, top-up, claim,
 retirement, or refund. A suspicious client lane may become `refundable` after
@@ -446,8 +457,12 @@ evidence only.
 `expiresAt` MUST be strictly after the verification clock and no later than
 `now + accepted.maxTimeoutSeconds`. Expiry is rechecked after awaited
 verification and immediately before protected work. An expired presentation
-may identify an already committed identical retry but cannot create new work
-or authorization.
+may identify an exactly matching immutable attempt whose handler had already
+been durably admitted. That attempt may resume only its persisted result or
+commit state. If expiry occurs after durable admission but before the handler
+starts, the attempt becomes recovery-required and the handler MUST NOT run;
+the server returns a retryable unavailable response until an operator supplies
+a known durable result. Expiry never creates new work or authorization.
 
 `nonce` is unique per logical request. `paymentIdentifier` is the validated
 x402 identifier or explicit `null`; both fields are signed. The server
@@ -635,7 +650,8 @@ For a new batch invocation, implementations perform:
 5. calculation of `T_after = T_before + accepted.amount`;
 6. v3 voucher and v1 presentation signing;
 7. server verification and durable consumption of the presentation;
-8. protected handler execution;
+8. a final presentation-expiry check at the actual protected-handler
+   invocation, followed by handler execution only while still live;
 9. atomic persistence of `T_after`, the voucher proof, fixed charge,
    commitment, identifier, and bounded result before release.
 
@@ -643,10 +659,11 @@ An identical retry resumes the same durable attempt and result. A changed
 fingerprint, requirements hash, context, payment identifier, or presentation
 cannot enter the handler.
 
-The fixed charge is committed when the protected invocation is admitted. The
-provider MUST NOT record or return a lower actual charge based on handler
-output. An MCP `isError` result is chargeable only under the explicit equal
-`mcpErrorChargeSompi` term.
+The fixed charge amount becomes immutable when the protected invocation is
+admitted, but A and the request commitment advance only after the invocation
+completes and its result is durably staged. The provider MUST NOT record or
+return a different charge based on handler output. An MCP `isError` result is
+chargeable only under the explicit equal `mcpErrorChargeSompi` term.
 
 ## Commitment
 

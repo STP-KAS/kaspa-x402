@@ -2,13 +2,20 @@
 
 Status: successful `0.1.0-alpha.11` funded live harness run.
 
-Generated: `2026-09-10T05:52:29.003Z`
+Generated: `2026-09-13T11:15:27.938Z`
 
 Network: `kaspa:testnet-10`
 
 Node: public TN10 websocket node with UTXO and selected-chain access.
 
-Virtual DAA score at run start: `566608374`
+Evidence-source boundary: the run trusted one configured public Testnet-10
+source for acceptance, confirmation, UTXO, and selected-chain evidence. This is
+funded alpha test evidence, not independently corroborated or Byzantine-resilient
+chain evidence, and it does not satisfy the mainnet gate.
+
+Virtual DAA score at run start: `569394266`
+
+Virtual DAA score at batch start: `569394853`
 
 The proof used the NodeJS SDK built from reviewed `rusty-kaspa` commit
 `c338d495bec29e4dc8b5149f99e8db6fa916ed4a`. The Alpha.11 covenant fixture was
@@ -17,6 +24,10 @@ compiled with official SilverScript v1.0.0 commit
 remained `49e6d7da1c59afc51949ba43c2682047aa0c487a586e143bc9addc62e08e3df3`,
 and the resulting launch identity is
 `863cbb4cb94e0e2458ee96a74a204de0508fa35e318438c85db018bc8f86c083`.
+The payment runtime source matched commit
+`ed9077f5223bbf6083d90fe169bccd2a2a0db456`; the live driver included the
+release-evidence correction that rebases the refund timeout from authoritative
+chain state immediately before the batch flow.
 The run executed all 18 required Alpha.11 flows against fresh recovery state.
 The raw report and signing material remain in an ignored owner-only local
 directory; this file contains only sanitized public evidence.
@@ -25,7 +36,7 @@ Hosted-gateway evidence is tracked separately in `docs/testnet-gateway.md`.
 ## Controlled Funding Split
 
 - Transaction id:
-  `281182e847e06580bf14b7f7a8c6dca5c01d1825115870f7afd111d0359b6381`
+  `c11aa9383c57c83df6a383db0af6bccd47d707b6024b5190b4d5ad2b4b603e6a`
 - Transaction version: `0` (`sdk-generated-transaction`)
 - Requested controlled outputs: `16` at `500000000` sompi each
 
@@ -37,7 +48,7 @@ It did not disclose or copy wallet key material.
 ### Tiny payment
 
 - Transaction id:
-  `0143322077d311f240acde3b10667d8a04845c450a7e64f069c82c34902e5e42`
+  `8787128706e7b1d20fb548a83e814af580654a3a32bbfba89771dc9a4b1356af`
 - Transaction version: `0`
 - Advertised amount and merchant gain: `10000000` sompi
 - Paid fee: `2000000` sompi
@@ -53,7 +64,7 @@ It did not disclose or copy wallet key material.
 ### Normal payment
 
 - Transaction id:
-  `1a0177ab2e7c6b3dd58a58c2d373f247f645293092ec2708743ca245ac59e4d5`
+  `92874217a4359e5b0df7e52a2946fa7a60146539b0854ccc485e3eaab4cba4e0`
 - Transaction version: `0`
 - Advertised amount and merchant gain: `100000000` sompi
 - Paid fee: `2000000` sompi
@@ -73,8 +84,8 @@ separately; it does not claim a universal Kaspa minimum payment or fee.
 
 Two independent head UTXOs were funded:
 
-- `20b12e23563390492a5730da21b5bf5f2849ab0e39459f37b53d5b12fd53840b:0`
-- `1216cefc758076db576cb84b8b23f692de84c8da90d38146d2cdfb87ef6a6c6d:0`
+- `df22e5ff55b1e4fd728f8142cb1d3a63e9169ca9f3fedc6090d6e486b2cf121e:0`
+- `bff98355fc7c03f0aacc91ec3e75974d9fb253c35502f7438c8e2cca0fcdeee0:0`
 
 Each started at `100000000` sompi with a `10000000` sompi application
 anti-churn threshold.
@@ -82,7 +93,7 @@ anti-churn threshold.
 The primary additive payment proved:
 
 - Transaction id:
-  `2363806b1e3c0bbe6be12eb52714525e89a9221c4add7315efd13a76eee86c2c`
+  `6ac1bf82cf48ee6fcf9b010c7c4681d0a5a52c22c4cdae49c2a5509539ea9e19`
 - Transaction version: `1`
 - Prior head amount: `100000000` sompi
 - Successor amount: `200000000` sompi
@@ -104,9 +115,9 @@ the payment.
 Two different signed transactions raced the same version-0 head:
 
 - Winner:
-  `8a23c56c495628c6a3d6a291a131f13142ce18a1113ed16e41ff6527786f3b4a`
+  `2074d89dffa9f32e0fa69d822d784704c59f49867f32d8da23b357b6be8ead97`
 - Losing candidate:
-  `fe448ffa40de9efe11809ab60655201dcd86bbe0522363cdca29cf31ce397774`
+  `b362a8b3472588ca5b129d26fd500923b6c185eb0fe480cf734187e4a48ee50d`
 
 Exactly one request returned `200`; the loser received a corrective `402` and
 remained durably pending until authoritative reconciliation. No replacement
@@ -120,24 +131,24 @@ was admitted and protected work ran once.
 - Public verify-only calls rejected valid but unobserved exact transactions at
   the authenticated finality gate before direct settlement.
 - Transaction
-  `ad3e2a6f9e399b60625d85c241dd3f1c522194479db66586a662d3dc2bd33f12`
+  `1b6a97548123fe3ba21c17fd926b17645bef4c409f8417ba703f159966eda0f7`
   was accepted by TN10 and then subjected to an injected post-broadcast runtime
   failure. A new server instance over preserved state reconciled it and ran the
   protected handler exactly once on retry.
 - Transaction
-  `c0f0b5e1be2aa585f97f91b60c6714b11a8a47a1f39b0158800d9b7cd5f80319`
+  `b0ed35349178aa1771ff425868d4d6c7b371f1da7de439982bac5752ac4ea555`
   externally advanced a head. Trusted candidate evidence reconciled the
   durable head from version `1` to `2`; no address-only inference was used.
 
 ## KIP-20 Batch Lifecycle
 
 Stable covenant ID:
-`db7299887cd5e9283186caac778e0afacf2bcb80c781b25f27e81181c8db6ba8`
+`41e99ea044f1f2f9013dc9aa2f09516db34d5b03f3a71c4a64830ca667a11149`
 
 ### Singleton genesis and vouchers
 
 - Deposit transaction:
-  `1d57898f50d3b7921ac1e45819f416230cde38960f2109c0fac429b1c4d00de5`
+  `f9a065595ad21653b9b21eab851dd1b158988f22249c4e9e863a3f780f08e861`
 - Transaction version: `1`
 - Singleton KIP-20 genesis independently verified: yes
 - Funded covenant value after fee: `498000000` sompi
@@ -148,19 +159,19 @@ Stable covenant ID:
 ### Two partial claims against one voucher
 
 - First claim transaction:
-  `c599760e678c672125ddd4794b5049410218c7ebc39fe4c517178f69fa60301c`
+  `d08b0d79ad2a3bad07f980acec66eeffb42691beb0237482cc14399a75ac0701`
 - First gross claim: `100000000` sompi
 - First server output: `98000000` sompi
 - First continuation value: `398000000` sompi
 - Second claim transaction:
-  `3c7b8cd516cc51b9411ae3928e080319f25f11bb969809c2b40e7bc206cb0516`
+  `fe98066be01139e06fd51842bc95f212361a3b4743c99a2bdedade548375924a`
 - Second gross claim: `50000000` sompi
 - Second server output: `48000000` sompi
 - Second continuation value: `348000000` sompi
 - Lifetime gross claimed after both claims: `150000000` sompi
 - Buyer-signed lifetime ceiling used for both claims: `200000000` sompi
 - Claim fee per transaction: `2000000` sompi
-- Finality: `accepted` for both claims
+- Finality: `confirmed` for both claims
 
 Both claims preserved the covenant ID while advancing the active outpoint,
 state script, and derived P2SH address. The second claim reused the same
@@ -169,10 +180,10 @@ cumulative voucher without exceeding its ceiling.
 ### Same-lineage top-up and restart reload
 
 - Top-up transaction:
-  `26a9114238c268c85d00ab042c3a24892305946bccf071aa843544c21f6a27e5`
+  `18a43fd9a823f5fac76924a931d6e8295f8e17ec5c10963b9cd4e7c1c95a0e86`
 - Added value: `400000000` sompi
 - Successor covenant value: `748000000` sompi
-- Lifetime actual charge and new signed ceiling: `498000000` sompi
+- Lifetime committed fixed charges and new signed ceiling: `498000000` sompi
 - Lifetime gross claimed remained: `150000000` sompi
 - Finality: `accepted`
 
@@ -188,12 +199,12 @@ claim attempt survived the accepted top-up.
   to TN10 and definitively rejected while the current continuation remained
   present.
 - Rejected stale-claim transaction:
-  `df84892f65109254925771c119ef57fc0b60657c5ec4a39c763b2a03ad4fa7d5`
-- Absolute refund DAA: `566611974`
-- Refund lock time: `566611975`
-- Observed DAA at submission: `566612121`
+  `f8bd41c289a043cefa9c992ea51947c580498ef55a573528c607349be309442e`
+- Absolute refund DAA: `569396653`
+- Refund lock time: `569396654`
+- Observed DAA at submission: `569396851`
 - Refund transaction:
-  `623a4df66a1125fec9acae75271fa14aaaeb6be15c61488fb7222335adb59777`
+  `91a21a522a48ec3745ec38d9fb1822309a99d538eb7be892a06329a76c6a5234`
 - Refund input: `748000000` sompi
 - Refund output: `746000000` sompi
 - Refund fee: `2000000` sompi
@@ -219,7 +230,7 @@ All 18 required flows passed:
 - stale-head and cross-scheme replay rejection;
 - terminal post-timeout refund with deterministic artifact recovery.
 
-The funding wallet retained `64686443100` sompi after the run.
+The funding wallet retained `60459366700` sompi after the run.
 
 ## Mainnet Read-Only And Offline Check
 

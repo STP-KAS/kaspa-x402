@@ -29,7 +29,8 @@ Audit scope must include:
 - payment-identifier, channel state, concurrency, and crash-safe transition
   attempts;
 - client funding-source policy, facilitator capability intersection, live
-  adapter recovery, and operator key handling.
+  adapter recovery, operator key handling, transport resource budgets, and
+  distributed admission controls.
 
 Audit output must include explicit pass/fail status for exact and
 batch-settlement. A Testnet-10-only pass is not sufficient for mainnet.
@@ -53,6 +54,15 @@ Cross-validation must prove the singleton transition shapes:
 The recorded validation level must be refreshed whenever consensus code,
 transaction serialization assumptions, covenant state, fixture scripts, fee
 policy, or compute-budget assumptions change.
+
+### Independent Chain Evidence
+
+Mainnet must not trust one node, endpoint, RPC provider, or commonly operated
+endpoint set for acceptance, UTXO, permanent-absence, or selected-chain lineage
+decisions. The deployment must use independently corroborated evidence or
+another audited Byzantine-resilient design, document source independence and
+disagreement policy, and fail closed whenever required sources are unavailable
+or disagree. Endpoint failover alone does not close this gate.
 
 ### Durable State
 
@@ -81,6 +91,21 @@ broadcast-only result must block another refund until a trusted
 Accepted application must atomically compare the captured head and mark both
 the channel refunded and the attempt applied; unknown, mismatched, or stale
 evidence fails closed without rebroadcast.
+
+### Distributed Admission And Resource Bounds
+
+Every production topology must enforce active-attempt, byte, and per-payer
+limits across all processes and Worker isolates that share a trust domain.
+Process-local counters are insufficient. The reference Worker uses renewable
+leases from its single named `GatewayState` Durable Object; other hosts need an
+equivalent transactional admission service. The chosen topology must be tested
+under concurrent cross-instance load before mainnet enablement.
+
+Facilitator bodies and remote chain reads must have whole-operation resource
+budgets. These include streamed byte and JSON-structure limits, finite body
+deadlines and caller aborts, plus cumulative selected-chain byte, block, page,
+and remote-operation bounds. Limit breaches, disagreement, and partial or
+non-converging lineage must fail closed.
 
 ### Operational Recovery
 

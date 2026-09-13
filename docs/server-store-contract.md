@@ -78,7 +78,7 @@ Each active lane record must contain:
 
 - stable `covenantId` and channel id;
 - current derived escrow address, outpoint, script public key, and value V;
-- lifetime actual charges A and lifetime on-chain gross settlement S;
+- lifetime committed fixed charges A and lifetime on-chain gross settlement S;
 - latest buyer-signed lifetime ceiling T and its signature;
 - refund terms, status, and the evidence needed to reconcile the next
   transition.
@@ -128,7 +128,7 @@ reconciler cannot mutate the same snapshot while that write is pending.
 
 At voucher acceptance, one transaction must verify and persist
 `0 <= S <= A <= T` and `(T - S) + R <= V`, where R is the configured claim
-reserve and fee floor. `A - S` is outstanding actual charge; `T - S` is
+reserve and fee floor. `A - S` is outstanding committed charge; `T - S` is
 authorization headroom. T is monotonic for the stable lineage and does not reset
 after a claim or top-up.
 
@@ -175,7 +175,7 @@ winner.
 Payment verification happens before the protected handler. Before invoking it,
 the store must durably reserve a batch work attempt keyed by channel, payment
 identifier when present, and request fingerprint. After handler success, the
-store must durably stage the result and actual charge before attempting the
+store must durably stage the result and fixed charge before attempting the
 final payment commit. The final transaction commits A, T, voucher and commitment
 evidence, then marks the work attempt applied.
 
@@ -189,6 +189,14 @@ retries. After the configured response-retention horizon, large cached results
 may be replaced with a compact conflict response, but the transaction,
 identifier, and channel replay tombstones remain. Security ownership is never
 evicted to make quota space.
+
+Once that terminal retention transition is durable, the full attempt no longer
+counts against active record, byte, or per-payer admission quotas. Its immutable
+O(1) replay tombstones remain outside those active quotas so an attacker cannot
+pin active capacity forever with completed payments. Tombstone storage is still
+monotonic security state: production stores must monitor and provision it under
+a separate capacity policy, with no time-based eviction of authoritative
+ownership, and must never delete it merely to admit new work.
 
 Stores must enforce configured aggregate record, aggregate byte, and
 per-authenticated-payer limits before admitting a new attempt. Admission

@@ -2364,7 +2364,7 @@ async function pnnSelectedChainFromCheckpoint(
   const addedChainBlocks: PnnSelectedChain["addedChainBlocks"] = [];
   const seenRemoved = new Set<string>();
   const seenAdded = new Set<string>();
-  let retainedBytes = 0;
+  let responseBytes = 0;
   let startHash = initialHash;
   for (let page = 0; page < 64; page += 1) {
     const raw = await withTimeout(
@@ -2376,6 +2376,25 @@ async function pnnSelectedChainFromCheckpoint(
       timeoutMs,
       "pnn getVirtualChainFromBlockV2",
     );
+    let encodedRaw: string | undefined;
+    try {
+      encodedRaw = JSON.stringify(raw);
+    } catch {
+      throw invalidTransaction(
+        "Kaspa PNN selected-chain response is not serializable",
+      );
+    }
+    if (encodedRaw === undefined) {
+      throw invalidTransaction(
+        "Kaspa PNN selected-chain response is not serializable",
+      );
+    }
+    responseBytes += new TextEncoder().encode(encodedRaw).byteLength;
+    if (responseBytes > MAX_PNN_SELECTED_CHAIN_BYTES) {
+      throw invalidTransaction(
+        "Kaspa PNN selected-chain response exceeds the cumulative byte limit",
+      );
+    }
     const response = unwrapRecord(raw, "virtualChainFromBlockV2Response");
     const removed = optionalArray(
       response.removedChainBlockHashes,
@@ -2436,25 +2455,6 @@ async function pnnSelectedChainFromCheckpoint(
           "Kaspa PNN accepted transactions",
         ),
       });
-    }
-    let pageBytes: number;
-    try {
-      pageBytes = new TextEncoder().encode(
-        JSON.stringify({
-          removedChainBlockHashes: pageRemoved,
-          addedChainBlocks: pageAdded,
-        }),
-      ).byteLength;
-    } catch {
-      throw invalidTransaction(
-        "Kaspa PNN selected-chain response is not serializable",
-      );
-    }
-    retainedBytes += pageBytes;
-    if (retainedBytes > MAX_PNN_SELECTED_CHAIN_BYTES) {
-      throw invalidTransaction(
-        "Kaspa PNN selected-chain response exceeds the cumulative byte limit",
-      );
     }
     removedChainBlockHashes.push(...pageRemoved);
     addedChainBlocks.push(...pageAdded);

@@ -149,7 +149,7 @@ export async function runLiveProof(context) {
       throw new Error("configured testnet node does not expose UTXO index");
 
     const timeoutDelta = positiveBigInt(context.timeoutDaa, "timeoutDaa");
-    const refundTimeoutDaa = (
+    const initialRefundTimeoutDaa = (
       BigInt(serverInfo.virtualDaaScore) + timeoutDelta
     ).toString();
     const addressCodec = makeAddressCodec(sdk, networkId);
@@ -256,7 +256,7 @@ export async function runLiveProof(context) {
       amount: EXACT_AMOUNT,
       minDepositSompi: BATCH_DEPOSIT_AMOUNT,
       claimReserveSompi: DEFAULT_FEE_SOMPI.toString(),
-      refundTimeoutDaa,
+      refundTimeoutDaa: initialRefundTimeoutDaa,
       chainProvider: chain,
       lockManager: serverLockManager,
       addressCodec,
@@ -275,29 +275,30 @@ export async function runLiveProof(context) {
         },
       },
     };
+    const claimBuilder = {
+      async buildClaimTransaction({ channel, claimAmount }) {
+        return buildPreparedClaim({
+          channel,
+          claimAmount,
+          rpc,
+          sdk,
+          networkId,
+          serverPrivateKeyHex: serverChannelKey.privateKey,
+          addressCodec,
+          pendingBroadcasts,
+          knownUtxos,
+          spentOutpoints,
+          batchArtifactsByTxid,
+          dataDir,
+          schnorr,
+        });
+      },
+    };
     const standardServer = new DirectModeServer({
       ...baseServerConfig,
       store: serverStore,
       exactProfile: "standard-native",
-      claimBuilder: {
-        async buildClaimTransaction({ channel, claimAmount }) {
-          return buildPreparedClaim({
-            channel,
-            claimAmount,
-            rpc,
-            sdk,
-            networkId,
-            serverPrivateKeyHex: serverChannelKey.privateKey,
-            addressCodec,
-            pendingBroadcasts,
-            knownUtxos,
-            spentOutpoints,
-            batchArtifactsByTxid,
-            dataDir,
-            schnorr,
-          });
-        },
-      },
+      claimBuilder,
     });
     const additiveHeads = [];
     for (let index = 0; index < 2; index += 1) {
@@ -403,7 +404,7 @@ export async function runLiveProof(context) {
       fundingSplit,
       timeout: {
         deltaDaa: timeoutDelta.toString(),
-        refundTimeoutDaa,
+        refundTimeoutDaa: initialRefundTimeoutDaa,
       },
     };
     let flow = "exact";
@@ -482,9 +483,23 @@ export async function runLiveProof(context) {
         externalHeadProofs,
       });
       flow = "batch";
+      const batchStartDaaScore = BigInt(await chain.getVirtualDaaScore());
+      const refundTimeoutDaa = (batchStartDaaScore + timeoutDelta).toString();
+      report.timeout = {
+        deltaDaa: timeoutDelta.toString(),
+        batchStartDaaScore: batchStartDaaScore.toString(),
+        refundTimeoutDaa,
+      };
+      const batchServer = new DirectModeServer({
+        ...baseServerConfig,
+        refundTimeoutDaa,
+        store: serverStore,
+        exactProfile: "standard-native",
+        claimBuilder,
+      });
       report.batch = await runBatch({
         client,
-        server: standardServer,
+        server: batchServer,
         serverStore,
         clientStore,
         rpc,
