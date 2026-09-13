@@ -68,6 +68,7 @@ const MAX_SAFE_TRANSACTION_OUTPUTS = 64;
 const MAX_SAFE_TRANSACTION_FEE_SOMPI = 100_000_000n;
 const MAX_KASPA_REST_RESPONSE_BYTES = 512 * 1024;
 const MAX_PNN_MESSAGE_BYTES = 512 * 1024;
+const MAX_PNN_SELECTED_CHAIN_BYTES = 4 * 1024 * 1024;
 const MAX_PNN_UTXO_ENTRIES = 4_096;
 const MAX_KASPA_REST_UTXOS_PER_ADDRESS = 512;
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
@@ -2363,6 +2364,7 @@ async function pnnSelectedChainFromCheckpoint(
   const addedChainBlocks: PnnSelectedChain["addedChainBlocks"] = [];
   const seenRemoved = new Set<string>();
   const seenAdded = new Set<string>();
+  let retainedBytes = 0;
   let startHash = initialHash;
   for (let page = 0; page < 64; page += 1) {
     const raw = await withTimeout(
@@ -2392,12 +2394,14 @@ async function pnnSelectedChainFromCheckpoint(
         "Kaspa PNN selected-chain V2 block data is incomplete",
       );
     }
+    const pageRemoved: Hash32Hex[] = [];
+    const pageAdded: PnnSelectedChain["addedChainBlocks"] = [];
     for (const hash of removed) {
       if (seenRemoved.has(hash)) {
         throw invalidTransaction("Kaspa PNN repeats a removed-chain block");
       }
       seenRemoved.add(hash);
-      removedChainBlockHashes.push(hash);
+      pageRemoved.push(hash);
     }
     for (let index = 0; index < added.length; index += 1) {
       const blockHash = added[index]!;
@@ -2424,7 +2428,7 @@ async function pnnSelectedChainFromCheckpoint(
           "Kaspa PNN accepted-transaction block header does not match its added-chain hash",
         );
       }
-      addedChainBlocks.push({
+      pageAdded.push({
         blockHash,
         header,
         transactions: optionalArray(
@@ -2433,6 +2437,27 @@ async function pnnSelectedChainFromCheckpoint(
         ),
       });
     }
+    let pageBytes: number;
+    try {
+      pageBytes = new TextEncoder().encode(
+        JSON.stringify({
+          removedChainBlockHashes: pageRemoved,
+          addedChainBlocks: pageAdded,
+        }),
+      ).byteLength;
+    } catch {
+      throw invalidTransaction(
+        "Kaspa PNN selected-chain response is not serializable",
+      );
+    }
+    retainedBytes += pageBytes;
+    if (retainedBytes > MAX_PNN_SELECTED_CHAIN_BYTES) {
+      throw invalidTransaction(
+        "Kaspa PNN selected-chain response exceeds the cumulative byte limit",
+      );
+    }
+    removedChainBlockHashes.push(...pageRemoved);
+    addedChainBlocks.push(...pageAdded);
     if (added.length === 0) {
       return { removedChainBlockHashes, addedChainBlocks };
     }

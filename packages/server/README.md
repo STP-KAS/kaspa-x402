@@ -64,3 +64,8 @@ Protected handlers run after payment verification and before the durable payment
 commit. Handlers with non-repeatable side effects should require the
 `payment-identifier` extension and keep their own idempotency or outbox record
 keyed by payment identifier and request fingerprint.
+
+After cached responses expire, immutable replay tombstones remain authoritative
+but no longer consume active-attempt record, byte, or per-payer admission
+capacity. Production stores must keep those tombstones in a scalable, monitored
+index; replay history must not permanently prevent admission of new payments.

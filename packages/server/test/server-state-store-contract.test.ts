@@ -512,7 +512,7 @@ describe("memory durable-state limits", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("compacts terminal responses but retains replay ownership", async () => {
+  it("retains replay ownership without exhausting active record capacity", async () => {
     let now = 0;
     const store = new MemoryServerChannelStore([], {
       limits: {
@@ -553,7 +553,7 @@ describe("memory durable-state limits", () => {
           head: undefined,
         }),
       ),
-    ).rejects.toThrow("record limit exceeded");
+    ).resolves.toMatchObject({ created: true });
     await expect(store.loadExactPayment(TX)).resolves.toMatchObject({
       response: {
         status: 409,
@@ -562,8 +562,11 @@ describe("memory durable-state limits", () => {
     });
     expect(store.durableStateStats()).toMatchObject({
       records: 1,
-      openRecords: 0,
+      openRecords: 1,
     });
+    await expect(
+      store.loadExactSettlementAttempt(TX),
+    ).resolves.toBeUndefined();
   });
 });
 

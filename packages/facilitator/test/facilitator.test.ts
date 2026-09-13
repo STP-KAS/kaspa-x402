@@ -106,6 +106,39 @@ describe("direct-mode facilitator", () => {
     ).rejects.toThrow("decoded limit");
   });
 
+  it("cancels a facilitator body that stalls past its deadline", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull: () => new Promise<void>(() => undefined),
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    await expect(
+      readFacilitatorRequestBody(
+        { body, headers: new Headers() },
+        { timeoutMs: 10 },
+      ),
+    ).rejects.toThrow("timed out");
+    expect(cancelled).toBe(true);
+  });
+
+  it("cancels a facilitator body when the caller aborts", async () => {
+    const controller = new AbortController();
+    const body = new ReadableStream<Uint8Array>({
+      pull: () => new Promise<void>(() => undefined),
+    });
+    const reading = readFacilitatorRequestBody({
+      body,
+      headers: new Headers(),
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(reading).rejects.toThrow("was aborted");
+  });
+
   it("rejects over-budget raw facilitator input before verifier or chain work", async () => {
     let verifierCalls = 0;
     const { facilitator, chain } = makeFacilitator({

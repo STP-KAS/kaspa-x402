@@ -2455,6 +2455,10 @@ function durableBudgetMetaKey(): string {
   return "durable-budget:meta";
 }
 
+function durableBudgetQuotaMigrationKey(): string {
+  return "durable-budget:migration:compacted-outside-active-quota-v1";
+}
+
 function durableBudgetRecordKey(key: string): string {
   return `durable-budget:record:${key}`;
 }
@@ -2592,6 +2596,28 @@ async function pruneTerminalDurableBudgets(
   limits: GatewayDurableStateLimits,
   now: number,
 ): Promise<void> {
+  // Alpha.11 briefly retained compact tombstones in active quota metadata.
+  // Reclaim those legacy reservations lazily while leaving the compact
+  // payment/commitment records themselves intact for replay rejection.
+  if (!(await txn.get<boolean>(durableBudgetQuotaMigrationKey()))) {
+    let start: string | undefined;
+    while (true) {
+      const legacyPage = await txn.list<DurableBudgetRecord>({
+        prefix: "durable-budget:record:",
+        ...(start ? { start } : {}),
+        limit: 128,
+      });
+      for (const record of legacyPage.values()) {
+        if (record.compactedAt !== undefined) {
+          await deleteDurableBudget(txn, record.key);
+        }
+      }
+      if (legacyPage.size < 128) break;
+      const lastKey = Array.from(legacyPage.keys()).at(-1)!;
+      start = `${lastKey}\u0000`;
+    }
+    await txn.put(durableBudgetQuotaMigrationKey(), true);
+  }
   const cutoff = now - limits.terminalRetentionMs;
   if (cutoff < 0) return;
   const prefix = "durable-budget:terminal:";
@@ -2660,28 +2686,9 @@ async function pruneTerminalDurableBudgets(
           response: expiredReplayResponse(),
         });
     }
-    const compactBytes = durableByteLength({
-      attemptId: record.attemptId,
-      payment: await txn.get(exactPaymentKey(record.attemptId)),
-      commitment: record.commitmentId
-        ? await txn.get(commitmentKey(record.commitmentId))
-        : undefined,
-      paymentIdentifier: record.paymentIdentifier
-        ? await txn.get(paymentIdentifierKey(record.paymentIdentifier))
-        : undefined,
-    });
-    const meta = await txn.get<DurableBudgetMeta>(durableBudgetMetaKey());
-    if (!meta) throw new Error("durable budget metadata is missing");
-    await txn.put(durableBudgetRecordKey(key), {
-      ...record,
-      bytes: compactBytes,
-      compactedAt: now,
-    } satisfies DurableBudgetRecord);
-    await txn.put(durableBudgetMetaKey(), {
-      ...meta,
-      bytes: meta.bytes + compactBytes - record.bytes,
-    });
-    await txn.delete(terminalKey);
+    // Keep the compact payment/commitment records as replay tombstones, but
+    // release active record, byte, and per-payer admission capacity.
+    await deleteDurableBudget(txn, key);
   }
 }
 

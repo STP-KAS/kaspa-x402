@@ -78,6 +78,8 @@ export interface FundingSuccessorIntent {
 export interface PreparedEscrowDeposit {
   transaction: ByteHex;
   transactionId: Hash32Hex;
+  /** Every outpoint consumed by the exact signed transaction. */
+  inputOutpoints: readonly FundingOutpoint[];
   successor: FundingSuccessorIntent;
   fundingSource?: FundingSourceKind;
 }
@@ -109,6 +111,8 @@ export interface EscrowTopUpRequest {
 export interface PreparedEscrowTopUp {
   transaction: ByteHex;
   transactionId: Hash32Hex;
+  /** Every outpoint consumed by the exact signed transaction. */
+  inputOutpoints: readonly FundingOutpoint[];
   successor: FundingSuccessorIntent;
   fundingSource?: FundingSourceKind;
 }
@@ -359,6 +363,8 @@ interface FundingTransitionAttemptBase {
   channelId: Hash32Hex;
   transaction: ByteHex;
   transactionId: Hash32Hex;
+  /** Immutable inputs used to bind a conflicting-spend absence proof. */
+  inputOutpoints: readonly FundingOutpoint[];
   intendedSuccessor: FundingSuccessorIntent;
   fundingSource: FundingSourceKind;
   status: FundingTransitionAttemptStatus;

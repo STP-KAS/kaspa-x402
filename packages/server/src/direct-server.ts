@@ -745,6 +745,28 @@ export class DirectModeServer {
                 return batchSettlementRecoveryRequiredResponse();
               }
               if (!recoveredBatchHandlerResult) {
+                if (verified.recoveryOnly)
+                  return batchSettlementRecoveryRequiredResponse();
+                const expiryError = batchPresentationExpiryError({
+                  maxTimeoutSeconds: verified.accepted.maxTimeoutSeconds,
+                  expiresAt:
+                    verified.paymentPayload.payload.presentation.expiresAt,
+                });
+                if (expiryError) {
+                  await this.#config.store.abandonBatchSettlement(
+                    claim.attempt.attemptId,
+                    `batch presentation expired before protected work: ${expiryError}`,
+                    new Date().toISOString(),
+                  );
+                  return this.#correctiveResponse(
+                    resource,
+                    verified.paymentPayload,
+                    batchPresentationExpiryFailure(expiryError),
+                    paymentAmount,
+                    requestedScheme,
+                    request.trustedSecurityContext,
+                  );
+                }
                 const handlerStarted =
                   await this.#config.store.beginBatchHandler(
                     batchAttemptId,
@@ -831,16 +853,43 @@ export class DirectModeServer {
               recoveredExactHandlerResult ?? recoveredBatchHandlerResult!;
           } else {
             try {
-              handlerResult = await this.#runAdapter(
+              const execution = await this.#runAdapter<
+                | { status: "expired"; reason: string }
+                | { status: "completed"; result: ProtectedHandlerResult }
+              >(
                 "protected-handler",
-                () =>
-                  handler({
-                    request,
-                    payment: verified,
-                    requestFingerprint: fingerprint,
-                    paymentIdentifier,
-                  }),
+                () => {
+                  if (verified.scheme === "batch-settlement") {
+                    const expiryError = batchPresentationExpiryError({
+                      maxTimeoutSeconds: verified.accepted.maxTimeoutSeconds,
+                      expiresAt:
+                        verified.paymentPayload.payload.presentation.expiresAt,
+                    });
+                    if (expiryError) {
+                      return { status: "expired", reason: expiryError };
+                    }
+                  }
+                  return Promise.resolve(
+                    handler({
+                      request,
+                      payment: verified,
+                      requestFingerprint: fingerprint,
+                      paymentIdentifier,
+                    }),
+                  ).then((result) => ({ status: "completed", result }));
+                },
               );
+              if (execution.status === "expired") {
+                if (batchAttemptId) {
+                  await markBatchHandlerRecoveryRequiredSafely(
+                    this.#config.store,
+                    batchAttemptId,
+                    `batch presentation expired after durable handler admission but before protected work: ${execution.reason}`,
+                  );
+                }
+                return batchSettlementRecoveryRequiredResponse();
+              }
+              handlerResult = execution.result;
             } catch {
               if (verified.scheme === "exact") {
                 await this.#config.store.markExactHandlerRecoveryRequired(
@@ -2262,7 +2311,7 @@ export class DirectModeServer {
     accepted: BatchPaymentRequirements,
     payload: DepositVoucherPayload,
     requestFingerprint: Hash32Hex,
-  ): Promise<VerifiedPayment> {
+  ): Promise<VerifiedBatchPayment> {
     validateChannelTerms(this.#config, accepted, payload.channelConfig);
     if (channelId(payload.channelConfig) !== payload.channelId) {
       throw new KaspaX402Error(
@@ -2306,7 +2355,7 @@ export class DirectModeServer {
       payload.channelConfig.network,
       payload.voucher,
     );
-    await this.#verifyBatchPresentationProof(
+    const recoveryOnly = await this.#verifyBatchPresentationProof(
       payload.channelId,
       payload.channelConfig.clientPublicKey,
       accepted,
@@ -2548,6 +2597,7 @@ export class DirectModeServer {
       commitExpectedChannel: existing ?? initial,
       voucher: payload.voucher,
       openedChannel: !existing,
+      ...(recoveryOnly ? { recoveryOnly: true } : {}),
     };
   }
 
@@ -2557,7 +2607,7 @@ export class DirectModeServer {
     accepted: BatchPaymentRequirements,
     payload: VoucherPayload,
     requestFingerprint: Hash32Hex,
-  ): Promise<VerifiedPayment> {
+  ): Promise<VerifiedBatchPayment> {
     const loaded = await this.#requireChannel(payload.channelId);
     validateChannelTerms(this.#config, accepted, loaded.channelConfig);
     if (loaded.status !== "active") {
@@ -2591,7 +2641,7 @@ export class DirectModeServer {
       loaded.channelConfig.network,
       payload.voucher,
     );
-    await this.#verifyBatchPresentationProof(
+    const recoveryOnly = await this.#verifyBatchPresentationProof(
       loaded.channelId,
       loaded.channelConfig.clientPublicKey,
       accepted,
@@ -2643,6 +2693,7 @@ export class DirectModeServer {
       commitExpectedChannel: channel,
       voucher: payload.voucher,
       openedChannel: false,
+      ...(recoveryOnly ? { recoveryOnly: true } : {}),
     };
   }
 
@@ -2711,7 +2762,7 @@ export class DirectModeServer {
     paymentPayload: PaymentPayload,
     requestFingerprint: Hash32Hex,
     voucher: Voucher,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const payload = paymentPayload.payload;
     if (payload.type !== "deposit-voucher" && payload.type !== "voucher") {
       throw new KaspaX402Error(
@@ -2755,19 +2806,12 @@ export class DirectModeServer {
         "batch presentation digest does not match its signed fields",
       );
     }
-    const assertLive = () => {
-      const expiryError = batchPresentationExpiryError({
-        maxTimeoutSeconds: accepted.maxTimeoutSeconds,
-        expiresAt: presentation.expiresAt,
-      });
-      if (expiryError) {
-        throw new KaspaX402Error(
-          "invalid_kaspa_signature",
-          `batch presentation expiry is invalid: ${expiryError}`,
-        );
-      }
-    };
-    assertLive();
+    const initialExpiryError = batchPresentationExpiryError({
+      maxTimeoutSeconds: accepted.maxTimeoutSeconds,
+      expiresAt: presentation.expiresAt,
+    });
+    if (initialExpiryError && initialExpiryError !== "expired_presentation")
+      throw batchPresentationExpiryFailure(initialExpiryError);
     const verified = await this.#runAdapter("batch-presentation-verifier", () =>
       this.#config.batchPresentationVerifier.verifyPresentation({
         channelId,
@@ -2783,7 +2827,42 @@ export class DirectModeServer {
         "batch presentation signature was rejected",
       );
     }
-    assertLive();
+    const currentExpiryError = batchPresentationExpiryError({
+      maxTimeoutSeconds: accepted.maxTimeoutSeconds,
+      expiresAt: presentation.expiresAt,
+    });
+    if (currentExpiryError && currentExpiryError !== "expired_presentation")
+      throw batchPresentationExpiryFailure(currentExpiryError);
+    if (currentExpiryError === "expired_presentation") {
+      const paymentRequirementsHash = batchPaymentRequirementsHash(accepted);
+      const currentPayloadHash = paymentPayloadHash(paymentPayload);
+      const attempt = await this.#config.store.loadBatchSettlementAttempt(
+        batchSettlementAttemptId({
+          channelId,
+          covenantId: voucher.covenantId,
+          requestFingerprint,
+          paymentRequirementsHash,
+          paymentPayloadHash: currentPayloadHash,
+        }),
+      );
+      if (
+        !attempt ||
+        attempt.status !== "pending" ||
+        !attempt.handlerStartedAt ||
+        attempt.channelId.toLowerCase() !== channelId.toLowerCase() ||
+        attempt.covenantId.toLowerCase() !== voucher.covenantId.toLowerCase() ||
+        attempt.requestFingerprint.toLowerCase() !==
+          requestFingerprint.toLowerCase() ||
+        attempt.paymentRequirementsHash.toLowerCase() !==
+          paymentRequirementsHash.toLowerCase() ||
+        attempt.paymentPayloadHash.toLowerCase() !==
+          currentPayloadHash.toLowerCase()
+      ) {
+        throw batchPresentationExpiryFailure(currentExpiryError);
+      }
+      return true;
+    }
+    return false;
   }
 
   async #assertRefundWindow(timeoutDaa: SompiString): Promise<void> {
@@ -5052,6 +5131,13 @@ function batchSettlementAttemptId(input: {
       scope: "kaspa:x402:batch-settlement-attempt:v2",
       ...input,
     }),
+  );
+}
+
+function batchPresentationExpiryFailure(reason: string): KaspaX402Error {
+  return new KaspaX402Error(
+    "invalid_kaspa_signature",
+    `batch presentation expiry is invalid: ${reason}`,
   );
 }
 

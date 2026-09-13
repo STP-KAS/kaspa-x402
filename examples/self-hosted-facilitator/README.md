@@ -26,7 +26,7 @@ export async function handleRequest(request: Request): Promise<Response> {
   try {
     body = request.method === "GET"
       ? undefined
-      : await readFacilitatorRequestBody(request);
+      : await readFacilitatorRequestBody(request, { timeoutMs: 10_000 });
   } catch {
     return Response.json({ error: "invalid_payload" }, { status: 400 });
   }

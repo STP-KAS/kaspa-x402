@@ -3797,6 +3797,103 @@ describe("direct-mode server", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("rechecks batch presentation expiry before starting protected work", async () => {
+    let now = Date.UTC(2030, 0, 1);
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const setup = makeServer();
+      const payment = makeDepositPayment(setup);
+      if (payment.payload.payload.type !== "deposit-voucher") {
+        throw new Error("expected deposit-voucher");
+      }
+      const expiresAt = Date.parse(
+        payment.payload.payload.presentation.expiresAt,
+      );
+      const readDaa = setup.chain.getVirtualDaaScore.bind(setup.chain);
+      vi.spyOn(setup.chain, "getVirtualDaaScore").mockImplementation(async () => {
+        now = expiresAt;
+        return readDaa();
+      });
+      let executions = 0;
+
+      const response = await setup.server.handlePaidRequest(
+        requestWithPayment(payment.payload),
+        async () => {
+          executions += 1;
+          return { body: "must not run", chargedAmount: "100" };
+        },
+      );
+
+      expect(response.status).toBe(402);
+      expect(executions).toBe(0);
+      expect(setup.store.durableStateStats().openRecords).toBe(0);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it(
+    "does not start protected work when a batch expires during handler admission",
+    async () => {
+      let now = Date.UTC(2030, 0, 1);
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        const store = new ExpiringBatchHandlerAdmissionStore();
+        const setup = makeServer({ store });
+        const payment = makeDepositPayment(setup);
+        if (payment.payload.payload.type !== "deposit-voucher") {
+          throw new Error("expected deposit-voucher");
+        }
+        const request = requestWithPayment(payment.payload, {
+          requestHash: "aa".repeat(32),
+        });
+        store.afterHandlerAdmission = () => {
+          now = Date.parse(payment.payload.payload.presentation.expiresAt);
+        };
+        let executions = 0;
+
+        const expired = await setup.server.handlePaidRequest(
+          request,
+          async () => {
+            executions += 1;
+            return { body: "must not run", chargedAmount: "100" };
+          },
+        );
+
+        expect(expired).toMatchObject({
+          status: 503,
+          body: { error: "batch_settlement_recovery_required" },
+        });
+        expect(executions).toBe(0);
+        expect(store.attemptId).toBeDefined();
+        await expect(
+          store.loadBatchSettlementAttempt(store.attemptId!),
+        ).resolves.toMatchObject({
+          handlerStartedAt: expect.any(String),
+          recoveryReason: expect.stringContaining(
+            "expired after durable handler admission",
+          ),
+        });
+
+        await setup.server.recoverBatchHandler(store.attemptId!, {
+          body: "recovered",
+        });
+        const recovered = await setup.server.handlePaidRequest(
+          request,
+          async () => {
+            executions += 1;
+            return { body: "must not rerun", chargedAmount: "100" };
+          },
+        );
+
+        expect(recovered).toMatchObject({ status: 200, body: "recovered" });
+        expect(executions).toBe(0);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
   it("rejects bad batch presentation signatures", async () => {
     const setup = makeServer();
     const payment = makeDepositPayment(setup);
@@ -4182,6 +4279,47 @@ describe("direct-mode server", () => {
 
     expect(recovered).toMatchObject({ status: 200, body: "recovered" });
     expect(executions).toBe(1);
+  });
+
+  it("finishes a matching recovered batch attempt after presentation expiry", async () => {
+    let now = Date.UTC(2030, 0, 1);
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const store = new UnmarkedBatchRecoveryStore();
+      const setup = makeServer({ store });
+      const payment = makeDepositPayment(setup);
+      if (payment.payload.payload.type !== "deposit-voucher") {
+        throw new Error("expected deposit-voucher");
+      }
+      const request = requestWithPayment(payment.payload, {
+        requestHash: "aa".repeat(32),
+      });
+      let executions = 0;
+
+      const failed = await setup.server.handlePaidRequest(request, async () => {
+        executions += 1;
+        throw new Error("uncertain protected work");
+      });
+      expect(failed.status).toBe(500);
+      expect(store.attemptId).toBeDefined();
+      await expect(
+        store.loadBatchSettlementAttempt(store.attemptId!),
+      ).resolves.toMatchObject({ handlerStartedAt: expect.any(String) });
+      await setup.server.recoverBatchHandler(store.attemptId!, {
+        body: "recovered",
+      });
+      now = Date.parse(payment.payload.payload.presentation.expiresAt) + 1;
+
+      const recovered = await setup.server.handlePaidRequest(request, async () => {
+        executions += 1;
+        return { body: "must not rerun", chargedAmount: "100" };
+      });
+
+      expect(recovered).toMatchObject({ status: 200, body: "recovered" });
+      expect(executions).toBe(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("does not register genesis state when atomic attempt admission fails", async () => {
@@ -7084,6 +7222,23 @@ class UnmarkedBatchRecoveryStore extends MemoryServerChannelStore {
     _observedAt: string,
   ): Promise<void> {
     throw new Error("transport failed before recovery marker persistence");
+  }
+}
+
+class ExpiringBatchHandlerAdmissionStore extends MemoryServerChannelStore {
+  attemptId?: Hash32Hex;
+  afterHandlerAdmission?: () => void;
+
+  override async beginBatchHandler(
+    attemptId: Hash32Hex,
+    startedAt: string,
+  ): Promise<boolean> {
+    const started = await super.beginBatchHandler(attemptId, startedAt);
+    if (started) {
+      this.attemptId = attemptId;
+      this.afterHandlerAdmission?.();
+    }
+    return started;
   }
 }
 

@@ -130,6 +130,17 @@ The gateway fails closed when it cannot establish chain health, transaction
 validity, accepted finality, or required durable state. Protected content is
 not produced for unsupported schemes or unverifiable payments.
 
+### Accepted Single-Source Limitation
+
+The reference gateway and live harness currently trust one configured source
+for exact acceptance, batch genesis/current-UTXO state, and PNN selected-chain
+evidence. These N03-N05 findings are accepted only for Testnet-10 testing with
+one source. A faulty source could provide consistently false evidence.
+
+This design must not be enabled for mainnet. Mainnet requires independently
+corroborated chain evidence or another audited Byzantine-resilient design;
+unknown or disagreeing evidence must fail closed.
+
 ## Durable State
 
 Gateway state is held in a SQLite-backed Cloudflare Durable Object. It records:

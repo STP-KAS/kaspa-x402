@@ -1006,6 +1006,8 @@ export interface VerifiedBatchPayment {
   openedChannel: boolean;
   /** Predecessor captured before an atomic deposit/top-up transition. */
   channelTransitionPrevious?: ServerChannelRecord | null;
+  /** Expired presentation accepted only to finish a matching started attempt. */
+  recoveryOnly?: boolean;
 }
 
 export interface VerifiedExactPayment {
