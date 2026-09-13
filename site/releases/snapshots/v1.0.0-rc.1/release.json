@@ -138,7 +138,7 @@
       "source": "docs/live-testnet-report.md",
       "target": "v1.0.0-rc.1/docs/live-testnet-report.md",
       "bytes": 9876,
-      "sha256": "0750a3cd9bd9fb9c9037c47b69a9bd190ad7e66f239d184c1432d2fbea36c188"
+      "sha256": "a4e7ec8c6c15f86b52dcf05398f172a8fa003cabb0b0f795d02d85fb6d0e498a"
     },
     {
       "source": "docs/live-testnet-proof.md",
@@ -477,5 +477,5 @@
       "sha256": "36564ac622863b7621f3d95fb1fa6c8a126d813d238919c3aa856c4a04cd0508"
     }
   ],
-  "contentSha256": "1fc6c29f04820686b18b781127fc77f8417fef2b56c7e97f6bc5995750d4ceb7"
+  "contentSha256": "59058d9665d573dbe5d5cb6242268616af11e1a2b16ff20a287b16d6aba77267"
 }
