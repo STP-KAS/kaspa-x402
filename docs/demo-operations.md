@@ -7,11 +7,16 @@ This runbook describes the public demo service at:
 https://demo.kaspa-x402.org
 ```
 
-Last repository-backed funded deployment evidence: Alpha.10 Worker version
-`c57eb755-e169-4a00-ac4a-5e035371cad1`, built from commit `78f2ada`. That
-historical evidence does not validate the v1 RC1 source, fresh durable state,
-or `kaspa-x402-escrow-v4`. v1 RC1 deployment and funded canary proof are
-pending.
+Current repository-backed deployment evidence: v1 RC1 Worker version
+`f9ef62e0-17b4-45c4-8765-e3c1789efb99`, built from tagged commit
+`040b1ec8335abadbb3c69cf1ea720ae45816b0f7`. Funded exact transaction
+`a502fc42046dd18b8ac7712e9b13ebe90f70c9d5094a86a73c4300e625943575`
+settled at accepted finality; its identical retry returned the stored success,
+and cross-resource reuse was rejected. The fresh funded release run also
+completed all 18 required flows. Its batch deposit, voucher, and
+idempotent-retry checks ran against a local Worker built from the exact RC
+source, not the public gateway; the sanitized transaction record is in
+[Testnet Gateway](testnet-gateway.md#exact-tagged-source-funded-run).
 
 The gateway is an integration target, not a wallet, custodian, faucet,
 facilitator, mainnet service, or availability commitment.
@@ -30,9 +35,9 @@ Important non-secret variables:
 | `KASPA_X402_SERVER_PUBLIC_KEY`               | Testnet server public key advertised in batch escrow terms.                                                                                                    |
 | `KASPA_X402_EXACT_AMOUNT`                    | Exact-payment price in sompi. Must be at least `10000000`.                                                                                                     |
 | `KASPA_X402_EXACT_PROFILE`                   | Exact profile: `standard-native` (default) or optional `additive`.                                                                                             |
-| `KASPA_X402_BATCH_AMOUNT`                    | Fixed per-request v1 RC1 batch charge in sompi.                                                                                                              |
+| `KASPA_X402_BATCH_AMOUNT`                    | Fixed per-request v1 RC1 batch charge in sompi.                                                                                                                |
 | `KASPA_X402_MIN_DEPOSIT_SOMPI`               | Batch escrow deposit floor. Must be at least `10000000`.                                                                                                       |
-| `KASPA_X402_CLAIM_RESERVE_SOMPI`             | Advertised v1 RC1 minimum successor reserve R. Must be at least `10000000`; the advertised deposit floor must cover the request ceiling plus this reserve.   |
+| `KASPA_X402_CLAIM_RESERVE_SOMPI`             | Advertised v1 RC1 minimum successor reserve R. Must be at least `10000000`; the advertised deposit floor must cover the request ceiling plus this reserve.     |
 | `KASPA_X402_REFUND_TIMEOUT_DAA_DELTA`        | Maximum DAA horizon for the persisted absolute batch timeout. The Worker rolls the timeout only at the minimum-lead boundary.                                  |
 | `KASPA_X402_MINIMUM_REFUND_LEAD_DAA`         | Minimum remaining DAA lead required before accepting a batch payment.                                                                                          |
 | `KASPA_X402_GLOBAL_CONCURRENCY`              | Deployment-wide cap for in-flight protected requests. Enforced by renewable leases in the gateway Durable Object; default `64`, maximum `256`.                 |
@@ -40,8 +45,8 @@ Important non-secret variables:
 | `KASPA_X402_RELEASE_VERSION`                 | Immutable prerelease snapshot checked by the scheduled canary.                                                                                                 |
 | `KASPA_X402_GATEWAY_BASE_URL`                | Gateway base URL used by canary checks.                                                                                                                        |
 | `KASPA_X402_HOSTED_EXACT_SETTLEMENT_ENABLED` | Set to `true` only when the hosted exact verifier, PNN broadcast path, and finality observation are deployed. Additive also requires a durable available head. |
-| `KASPA_X402_CHAIN_BROADCAST_MODE`            | `pnn` for hosted KIP-10 exact submission and authoritative batch selected-chain lineage. REST mode cannot prove batch lineage continuity.                       |
-| `KASPA_X402_PNN_ENDPOINTS`                   | Comma-separated public TN10 WSS endpoints used for exact submission and `GetVirtualChainFromBlockV2` batch lineage recovery.                                    |
+| `KASPA_X402_CHAIN_BROADCAST_MODE`            | `pnn` for hosted KIP-10 exact submission and authoritative batch selected-chain lineage. REST mode cannot prove batch lineage continuity.                      |
+| `KASPA_X402_PNN_ENDPOINTS`                   | Comma-separated public TN10 WSS endpoints used for exact submission and `GetVirtualChainFromBlockV2` batch lineage recovery.                                   |
 
 The Worker must not receive a mainnet key, a spending key, or a faucet key.
 Claim broadcasting is disabled in the hosted gateway package.
@@ -76,9 +81,10 @@ object.
    `kaspa-x402-escrow-v4` template; no older batch lane continues across the
    cutover.
 
-Pending. Do not mark this cutover complete until the v1 RC1 release snapshot,
-fresh `demo-gateway-v1.0.0-rc.1` state, and funded exact and batch canaries have
-been independently recorded.
+Completed on 2026-09-13. The v1 RC1 release snapshot, fresh
+`demo-gateway-v1.0.0-rc.1` state, funded exact deployment canary, fresh-state
+funded batch validation, and passing scheduled canary were independently
+recorded before final release verification.
 
 ## Deploy
 

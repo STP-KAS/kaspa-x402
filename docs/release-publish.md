@@ -1,12 +1,13 @@
 # Release Publish Checklist
 
-Status: `1.0.0-rc.1` is a local release candidate. It is not yet published,
-tagged, released, or deployed. Publishes require npm authorization and must not
-happen accidentally from CI or an unauthenticated shell.
+Status: `1.0.0-rc.1` was published, tagged, released, and deployed on
+2026-09-13. This checklist remains the reusable release procedure. Future
+publishes require npm authorization and must not happen accidentally from CI
+or an unauthenticated shell.
 
-Registry note: the `latest` and `alpha` dist-tags still resolve to
-`0.1.0-alpha.10`. Publish v1 RC1 under `rc`; do not move `latest`. The `rc`
-tag and exact `1.0.0-rc.1` version are the supported install paths.
+Registry note: `1.0.0-rc.1` is the current recommended Testnet release. The
+`rc` tag and exact version are its supported install paths. The unqualified
+`latest` tag is reserved for final `1.0.0` and must not be used as an RC input.
 
 Registry workflow note: npm's current release flow stages packages before a
 human proof-of-presence approval. Use npm 11.15 or later to run
@@ -473,8 +474,9 @@ npm view @kaspa-x402/client dist-tags
 npm view @kaspa-x402/server dist-tags
 ```
 
-Verify that `rc` resolves to `1.0.0-rc.1` and that `latest` still resolves to
-`0.1.0-alpha.10`. Use explicit `@rc` installs until stable `1.0.0` is approved.
+Verify that `rc` resolves to `1.0.0-rc.1` and that the prerelease publish did
+not move the unqualified `latest` tag. Use explicit `@rc` installs until final
+`1.0.0` is approved.
 
 ## Release Caveats
 

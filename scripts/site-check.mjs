@@ -455,6 +455,12 @@ function checkContent() {
     /For real paid requests, use the hosted gateway/i,
     /remains the paid-canary-proven alpha\.\d+ deployment until/i,
     /paid-canary-proven Alpha\.11/i,
+    /funded deployment proof is pending/i,
+    /public registry and gateway remain Alpha\.10/i,
+    /paid-canary-proven Alpha\.10 Worker/i,
+    /Status: v1 RC1 deployment candidate/i,
+    /paid-canary-proven hosted deployment remains Alpha\.10/i,
+    /Pending\. Do not mark this cutover complete/i,
   ];
   for (const file of activeTextFiles) {
     const relative = path.relative(outDir, file).replaceAll(path.sep, "/");
@@ -465,13 +471,16 @@ function checkContent() {
     }
   }
 
-  for (const relative of ["index.html", "demo/index.html"]) {
-    assertContains(
-      path.join(outDir, relative),
-      "funded deployment proof is pending",
-      `${relative} v1 RC1 pending deployment proof`,
-    );
-  }
+  assertContains(
+    path.join(outDir, "index.html"),
+    "Current recommended Testnet release",
+    "index.html current v1 RC1 release status",
+  );
+  assertContains(
+    path.join(outDir, "demo/index.html"),
+    "recorded funded and scheduled canary evidence",
+    "demo/index.html current v1 RC1 deployment status",
+  );
   assertContains(
     path.join(outDir, "docs/testnet-gateway.md"),
     "Historical Alpha.10 Evidence",
@@ -479,12 +488,31 @@ function checkContent() {
   );
   assertContains(
     path.join(outDir, "docs/testnet-gateway.md"),
-    "Status: v1 RC1 deployment candidate",
-    "docs/testnet-gateway.md v1 RC1 pending deployment proof",
+    "Status: v1 RC1 is live",
+    "docs/testnet-gateway.md current v1 RC1 deployment proof",
   );
+  for (const marker of [
+    "Exact Tagged-Source Funded Run",
+    "040b1ec8335abadbb3c69cf1ea720ae45816b0f7",
+    "81af41d91b376230a056bdab9995d67707c08e43f8eb224a8701e3d921e500a0",
+    "not the public gateway deployment",
+    "8284780efd055d22d0685f790df3a26bc2c2e85a",
+  ]) {
+    assertContains(
+      path.join(outDir, "docs/testnet-gateway.md"),
+      marker,
+      "docs/testnet-gateway.md exact tagged-source evidence boundary",
+    );
+  }
   for (const [relative, marker] of [
-    ["docs/live-testnet-report.md", "successful `1.0.0-rc.1` funded live harness run"],
-    ["docs/demo-implementer-guide.md", "public registry and gateway remain Alpha.10"],
+    [
+      "docs/live-testnet-report.md",
+      "successful `1.0.0-rc.1` funded live harness run",
+    ],
+    [
+      "docs/demo-implementer-guide.md",
+      "current recommended Testnet release explicitly",
+    ],
   ]) {
     assertContains(
       path.join(outDir, relative),
@@ -493,8 +521,11 @@ function checkContent() {
     );
   }
   for (const [relative, marker] of [
-    ["docs/release-publish.md", "is a local release candidate"],
-    ["docs/demo-interop-checklist.md", "v1 RC1 deployment proof is pending"],
+    [
+      "docs/release-publish.md",
+      "was published, tagged, released, and deployed",
+    ],
+    ["docs/demo-interop-checklist.md", "current v1 RC1 Testnet"],
   ]) {
     assertContains(
       path.join(root, relative),

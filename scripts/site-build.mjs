@@ -162,9 +162,9 @@ function writeHomePage() {
 
     <h2 id="status">Status</h2>
     <ul>
-      <li>v1 release candidate: draft specs, JSON schemas, conformance vectors, and TypeScript packages under the <code>rc</code> npm tag.</li>
+      <li>Current recommended Testnet release: <code>${escapeHtml(releaseVersion)}</code>, with draft specs, JSON schemas, conformance vectors, and TypeScript packages under the <code>rc</code> npm tag.</li>
       <li>Network target: <code>kaspa:testnet-10</code> only.</li>
-      <li>Hosted gateway: <a href="https://demo.kaspa-x402.org"><code>demo.kaspa-x402.org</code></a> is the Testnet-10 integration endpoint. The unversioned site describes the ${escapeHtml(releaseVersion)} candidate source; v1 RC1 funded deployment proof is pending, and the <a href="/docs/testnet-gateway/">gateway reference</a> separates it from historical Alpha.10 evidence.</li>
+      <li>Hosted gateway: <a href="https://demo.kaspa-x402.org"><code>demo.kaspa-x402.org</code></a> runs <code>${escapeHtml(releaseVersion)}</code> on Testnet-10. The release completed a fresh funded 18-flow exact and batch run; the deployed gateway also passed a funded exact canary and its scheduled health checks. See the <a href="/docs/testnet-gateway/">gateway reference</a> for current evidence and historical release boundaries.</li>
       <li>Mainnet: blocked. <code>kaspa:mainnet</code> is a reserved profile name; the blocking gates are listed in <a href="/docs/mainnet-readiness/">mainnet readiness</a>. Do not use any of this with production funds.</li>
       <li>Standards: the <code>kaspa:*</code> network identifiers are draft binding names, not accepted x402 registry or CAIP entries.</li>
       <li>Stability: package names, schemas, and field names may change before stable <code>1.0.0</code>. See the <a href="/docs/versioning-policy/">versioning policy</a>.</li>
@@ -201,7 +201,7 @@ function writeHomePage() {
     </ul>
 
     <h2 id="packages">Packages</h2>
-    <p>Install with <code>@rc</code> or the exact version; <code>latest</code> remains on the previous alpha until stable <code>1.0.0</code>.</p>
+    <p><code>${escapeHtml(releaseVersion)}</code> is the current recommended Testnet release. Install it with <code>@rc</code> or the exact version; <code>@rc</code> is the npm channel for release candidates.</p>
     <pre><code>npm install ${escapeHtml(releaseNpmInstall().join(" "))}</code></pre>
     ${packagesTable()}
     <p class="muted">Machine-readable: <a href="/packages.json"><code>packages.json</code></a>, <a href="/site-manifest.json"><code>site-manifest.json</code></a>.</p>
@@ -369,7 +369,7 @@ function writeReleasesPage() {
   <main>
     <h1>Releases</h1>
     <p>Immutable snapshots of the published surface, one per release. Unversioned routes track the active prerelease; snapshot content is hash-locked.</p>
-    <p>Install the release candidate with <code>@rc</code> or its exact version; <code>latest</code> is reserved for stable <code>1.0.0</code>.</p>
+    <p>Install <code>${escapeHtml(releaseVersion)}</code>, the current recommended Testnet release, with <code>@rc</code> or its exact version.</p>
     <div class="table-wrap"><table>
       <thead><tr><th>Version</th><th>Snapshot</th><th>Metadata</th><th>Lock</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -403,7 +403,7 @@ function writeDemoPage() {
       `
   <main>
     <h1>Browser Test Client</h1>
-    <p class="muted">Testnet-only browser client for inspecting Kaspa x402 offers, checking public-node connectivity, and rehearsing exact or v1 RC1 batch payment headers. The hosted gateway at <a href="https://demo.kaspa-x402.org"><code>demo.kaspa-x402.org</code></a> is the Testnet-10 integration endpoint; v1 RC1 funded deployment proof is pending. See the <a href="/docs/testnet-gateway/">gateway reference</a> for the candidate boundary and historical Alpha.10 evidence.</p>
+    <p class="muted">Testnet-only browser client for inspecting Kaspa x402 offers, checking public-node connectivity, and rehearsing exact or v1 RC1 batch payment headers. The hosted gateway at <a href="https://demo.kaspa-x402.org"><code>demo.kaspa-x402.org</code></a> runs <code>${escapeHtml(releaseVersion)}</code> on Testnet-10 with recorded funded and scheduled canary evidence. See the <a href="/docs/testnet-gateway/">gateway reference</a> for current evidence and historical release boundaries.</p>
 
     <section class="demo-panel" aria-labelledby="demo-safety">
       <h2 id="demo-safety">Safety Boundary</h2>
@@ -629,7 +629,7 @@ function writePnnSpikeJson() {
     },
     worker: {
       status:
-        "v1 RC1 candidate source for https://demo.kaspa-x402.org; funded cutover proof is pending and the recorded funded evidence is Alpha.10",
+        "v1 RC1 is deployed at https://demo.kaspa-x402.org; funded exact and fresh-state batch validation completed, and the scheduled canary passes",
       verifiedCapabilities: [
         "REST chain health",
         "Durable Object state",
@@ -1135,8 +1135,7 @@ function rewriteMarkdownHref(href, sourceDir) {
     return `/${normalized}${suffix}`;
   }
   const normalized = path.posix.normalize(`${sourceDir}/${target}`);
-  if (publishedArtifactFiles.has(normalized))
-    return `/${normalized}${suffix}`;
+  if (publishedArtifactFiles.has(normalized)) return `/${normalized}${suffix}`;
   return href;
 }
 
