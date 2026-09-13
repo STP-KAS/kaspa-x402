@@ -243,12 +243,21 @@ describe("trusted context and MCP admission", () => {
   });
 
   it("rejects raw credential-shaped handler state", () => {
-    expect(() =>
-      trustedSecurityContextHash({
-        principal: "user:1",
-        handlerState: { bearer_token: "do-not-store" },
-      }),
-    ).toThrow("raw credential field");
+    for (const key of [
+      "bearer_token",
+      "accessToken",
+      "clientSecret",
+      "sessionCookie",
+      "oauthCredentialId",
+      "API_PASSWORD",
+    ]) {
+      expect(() =>
+        trustedSecurityContextHash({
+          principal: "user:1",
+          handlerState: { [key]: "do-not-store" },
+        }),
+      ).toThrow(`raw credential field ${key}`);
+    }
   });
 
   it("accepts MCP audience and tool-name maxima and rejects maximum plus one", () => {

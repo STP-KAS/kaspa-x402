@@ -18,8 +18,22 @@ export interface TrustedSecurityContext {
   handlerState?: Readonly<Record<string, TrustedHandlerStateValue>>;
 }
 
-const CREDENTIAL_FIELD =
-  /(?:^|[-_])(authorization|cookie|credential|password|secret|token)(?:$|[-_])/i;
+const CREDENTIAL_FIELD_WORDS = new Set([
+  "authorization",
+  "cookie",
+  "credential",
+  "password",
+  "secret",
+  "token",
+]);
+
+function isCredentialField(key: string): boolean {
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1-$2")
+    .split(/[-_]/);
+  return words.some((word) => CREDENTIAL_FIELD_WORDS.has(word.toLowerCase()));
+}
 
 export function canonicalTrustedSecurityContext(
   context: TrustedSecurityContext,
@@ -58,7 +72,7 @@ export function canonicalTrustedSecurityContext(
   const handlerState: Record<string, TrustedHandlerStateValue> = {};
   if (context.handlerState) {
     for (const key of Object.keys(context.handlerState).sort()) {
-      if (CREDENTIAL_FIELD.test(key)) {
+      if (isCredentialField(key)) {
         throw new KaspaX402Error(
           "invalid_kaspa_x402_payload",
           `trusted security context must not contain raw credential field ${key}`,
