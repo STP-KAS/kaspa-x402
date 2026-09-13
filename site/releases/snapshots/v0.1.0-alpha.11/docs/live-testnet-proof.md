@@ -56,9 +56,9 @@ prove that the successor increase equals the advertised payment exactly. Every
 exact profile must reconcile merchant gain, payer cost, fee, and mass. Batch
 evidence must retain one covenant ID from singleton genesis through repeated
 claims and top-up, while advancing only the current outpoint. For every batch
-step, report A (lifetime actual charge), S (lifetime gross claimed), T (latest
-buyer-signed lifetime ceiling), V (current covenant value), and R (advertised
-minimum successor reserve), and prove `0 <= S <= A <= T` plus
+step, report A (lifetime committed fixed charges), S (lifetime gross claimed),
+T (latest buyer-signed lifetime ceiling), V (current covenant value), and R
+(advertised minimum successor reserve), and prove `0 <= S <= A <= T` plus
 `(T - S) + R <= V`. Claim, top-up, and refund evidence must reconcile inputs,
 outputs, fees, successor state, and restart recovery without rerunning protected
 work or rebroadcasting an unresolved or already accepted transition. Refund
@@ -69,6 +69,13 @@ atomically marks the channel refunded and the attempt applied.
 Claim evidence must show that advancing `S` rotates the stateful script and its
 derived P2SH address. Top-up evidence must show that preserving `S` preserves
 both while the outpoint and `V` advance.
+
+The sanitized committed report must identify the chain-evidence source class
+and number of independently operated sources used for acceptance, confirmation,
+UTXO, and selected-chain lineage decisions. Endpoint failover is not independent
+corroboration. The Alpha.11 funded run may use one configured Testnet-10 source,
+but the public report must state that boundary and must not present it as
+mainnet or Byzantine-resilient evidence.
 
 ## Safety Gates
 

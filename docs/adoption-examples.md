@@ -22,9 +22,9 @@ replay handling path.
 
 ## Protect Repeated Requests
 
-Use `batch-settlement` when repeated or variable-cost requests should share one
-escrow channel. The client opens a channel and signs cumulative vouchers as
-requests are served.
+Use `batch-settlement` when repeated requests with a pre-approved fixed charge
+should share one escrow channel. The client opens a channel and signs cumulative
+vouchers as requests are served.
 
 The HTTP example includes deposit-voucher and voucher-only channel reuse paths.
 

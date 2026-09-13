@@ -71,26 +71,26 @@
     {
       "source": "spec/kaspa-x402-v1.md",
       "target": "v0.1.0-alpha.11/spec/kaspa-x402-v1.md",
-      "bytes": 12156,
-      "sha256": "b9aeff90eaf8b9fbe2c9e47ba72b62a1c3711749f5bf5eefa1c14133087e9f7e"
+      "bytes": 12168,
+      "sha256": "12d0dc875227e13cb1a7414b03aaac466dc558e3cc5b9ad0c3214f1449b74b32"
     },
     {
       "source": "spec/kaspa-exact-v2.md",
       "target": "v0.1.0-alpha.11/spec/kaspa-exact-v2.md",
-      "bytes": 34328,
-      "sha256": "02f41a005b87f9c92717abcf06dfa5ed20844b14b3b525ddb0cc92bfd7f4c49a"
+      "bytes": 35103,
+      "sha256": "4a72d85a26982360d3d8f3dc9d9f158a33baa39bbb9e127f32582e0a37b16f9c"
     },
     {
       "source": "spec/kaspa-batch-settlement-v3.md",
       "target": "v0.1.0-alpha.11/spec/kaspa-batch-settlement-v3.md",
-      "bytes": 27857,
-      "sha256": "8b9b88a17bc00ef6deb012ab705fd911340b77c17d76466a1beee09d61c979c0"
+      "bytes": 29096,
+      "sha256": "05f142c567ad18c0be46a222e1007eb1e313298aeb01bdd04deceb6e290ebc45"
     },
     {
       "source": "spec/http-profile.md",
       "target": "v0.1.0-alpha.11/spec/http-profile.md",
-      "bytes": 2820,
-      "sha256": "4511607cd4930ca0c67224939c559bd000f5cad2b9c0501b89c62331bfca033d"
+      "bytes": 2863,
+      "sha256": "b5bfae455a0db183ce44cac91fd7d067d52ecc4a2d1968b06ccf05c8f6510f18"
     },
     {
       "source": "spec/mcp-profile.md",
@@ -101,8 +101,8 @@
     {
       "source": "spec/facilitator-profile.md",
       "target": "v0.1.0-alpha.11/spec/facilitator-profile.md",
-      "bytes": 5330,
-      "sha256": "2f0b31ad382b3030da799eaaa49549cebc0f08d518415246cc6be8836fcb9b9e"
+      "bytes": 5873,
+      "sha256": "32f0cf107506d4021e2fa7bb39a71cc7b91ba2d2f82359b7b59a3cf6c819e18b"
     },
     {
       "source": "spec/errors.md",
@@ -125,44 +125,44 @@
     {
       "source": "docs/public-proposal.md",
       "target": "v0.1.0-alpha.11/docs/public-proposal.md",
-      "bytes": 4034,
-      "sha256": "b7a00af41227687451bc5965f8beb921e7efb0dff093f5bc7f7af43dd6b1e5e1"
+      "bytes": 4714,
+      "sha256": "cbe5b3037729cea8392ae6ba386d2625723ab4ad1d3e38c40703fca1d31c97f1"
     },
     {
       "source": "docs/adoption-examples.md",
       "target": "v0.1.0-alpha.11/docs/adoption-examples.md",
-      "bytes": 1840,
-      "sha256": "05c6a4d94506732d7687b6272e95b8c00c54bc19bdb37d71d980ff7a5c4f40c9"
+      "bytes": 1856,
+      "sha256": "748bf1f10127cb7d7f8c2d43e9639eb40e1c12683d49d3e4cb1afc24d433be48"
     },
     {
       "source": "docs/live-testnet-report.md",
       "target": "v0.1.0-alpha.11/docs/live-testnet-report.md",
-      "bytes": 9284,
-      "sha256": "b6b3084348219cd356da00ba508c1015b7d8f99cd3f46cc08822d57ec2b5a8b6"
+      "bytes": 9879,
+      "sha256": "caf7a2c574bd071a99f394d2ab2049c4ad2597c35461ab378c6e19200bb80c3b"
     },
     {
       "source": "docs/live-testnet-proof.md",
       "target": "v0.1.0-alpha.11/docs/live-testnet-proof.md",
-      "bytes": 4844,
-      "sha256": "aff5710933346debf66be177b700aefd439f4144084ae3ab870f7f787e7b4c70"
+      "bytes": 5289,
+      "sha256": "24dcae0e635a35887bdcaf48fa97aff64f9d1fa9ee926fb330171b60370bd4ee"
     },
     {
       "source": "docs/review-closure-ledger.md",
       "target": "v0.1.0-alpha.11/docs/review-closure-ledger.md",
-      "bytes": 7211,
-      "sha256": "99b2a148e6fad9daf014bfb587541c79795b9803839539b8318b3f550cebbb3d"
+      "bytes": 8070,
+      "sha256": "7f85c1dd1bf4dc47ff601a08dd166f2a148f396e05d080578458c635084fb62d"
     },
     {
       "source": "docs/security-threat-model.md",
       "target": "v0.1.0-alpha.11/docs/security-threat-model.md",
-      "bytes": 11042,
-      "sha256": "6117b264a49c0b952b4b99f9fc49b27733e7cee8d057df275f9f8ac4ac324289"
+      "bytes": 13601,
+      "sha256": "06fdb21d445f65908b754932b55f4682dcf9f918c42d6ebbaf1ab4c4e5eaf4f6"
     },
     {
       "source": "docs/mainnet-readiness.md",
       "target": "v0.1.0-alpha.11/docs/mainnet-readiness.md",
-      "bytes": 5446,
-      "sha256": "0f531e9ba43124f55176136fd132161c778817be71cd3f36b49dfbca339b0f5b"
+      "bytes": 6838,
+      "sha256": "2eabf8abdb2f9ee39f578a67b3c7cd191e6084d03482e668ae17e16372534183"
     },
     {
       "source": "docs/versioning-policy.md",
@@ -179,8 +179,8 @@
     {
       "source": "docs/server-store-contract.md",
       "target": "v0.1.0-alpha.11/docs/server-store-contract.md",
-      "bytes": 11320,
-      "sha256": "a2a63e228f047224adc4996d9a3dea74bc92afcaad8dce352a2fe603cee5e37b"
+      "bytes": 11867,
+      "sha256": "fa8815002abeeee5f79a0678213139d4a245e9f39e8ce7fb5a29a527f20d68ab"
     },
     {
       "source": "docs/server-runtime-lock-contract.md",
@@ -477,5 +477,5 @@
       "sha256": "36564ac622863b7621f3d95fb1fa6c8a126d813d238919c3aa856c4a04cd0508"
     }
   ],
-  "contentSha256": "0baaa3ac0b6f98b5987785b0e62e55ef8eed00b069d2fbea5b0ad10912422dfe"
+  "contentSha256": "71e045d45b77a3e4406220d05cdaad6d76285a5fe358e0345e073b2387e7c5bb"
 }

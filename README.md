@@ -38,7 +38,7 @@ The binding ships two x402 schemes:
   "scheme": "batch-settlement",
   "network": "kaspa:<network>",
   "asset": "KAS",
-  "amount": "<max per-request sompi>",
+  "amount": "<fixed per-request sompi>",
   "extra": {
     "binding": "kaspa-escrow-v3",
     "templateId": "kaspa-x402-escrow-v4"

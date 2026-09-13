@@ -23,6 +23,11 @@ not supported runtime profiles.
 - optional self-hosted facilitator endpoints;
 - operator live-testnet adapters and recovery journals.
 
+The Alpha.11 reference gateway trusts one configured Testnet-10 evidence source
+at a time. Multiple endpoint URLs are availability failover, not independent
+corroboration. This accepted test boundary must not be treated as Byzantine-safe
+or used to enable mainnet.
+
 ## Core Threats
 
 | Threat | Mitigation | Residual risk |
@@ -34,9 +39,15 @@ not supported runtime profiles.
 | Parallel payment, deposit, top-up, claim, refund, recovery, or retirement | One durable per-channel operation lease plus a shared per-lineage lock and complete-snapshot compare-and-set admit only one transition. Broadcast and protected-effect uncertainty retain the lease until reconciled. | Network uncertainty can temporarily block the lane while the winning operation is reconciled. |
 | Client refund broadcast uncertainty | Before broadcast, the client durably reserves the exact signed transaction, deterministic transaction id, stable covenant id, and captured channel head. Unknown results are reconciled through trusted chain evidence without rebuilding or rebroadcasting. | An unavailable or inconclusive reconciler keeps the channel blocked until accepted-or-confirmed evidence is available. |
 | Duplicate retry double-executes protected work | A durable work attempt and identifier reservation bind payer, channel or transaction, payload, scope, and request fingerprint before handler execution. Only one handler-start transition succeeds; a staged result is reused if final commit fails. | A crash after a non-repeatable side effect but before result staging still requires handler-owned idempotency or an outbox. |
-| Handler failure consumes payment state | A and the request commitment advance only after protected handler success unless the flow has an explicit recoverable on-chain transition. | Accepted genesis or top-up state remains live even when later protected work fails. |
+| Presentation expires while work is being admitted | Expiry is rechecked at the actual handler invocation. An already admitted attempt that expires before the handler starts becomes recovery-required and cannot run protected work; only an exactly matching immutable retry may resume persisted result or commit state. | Operators must supply a known durable result when admission completed but protected work never safely ran. |
+| Handler failure consumes payment state | The committed fixed-charge total and request commitment advance only after protected handler success unless the flow has an explicit recoverable on-chain transition. | Accepted genesis or top-up state remains live even when later protected work fails. |
 | Stale node or RPC failure | Verification fails closed unless required finality and covenant-transition evidence is present. | Operators must monitor node health, pruning horizon, and finality lag. |
+| Single-source chain evidence is faulty | Testnet verification fails closed on unavailable or internally inconsistent evidence, and mainnet stays disabled until independently corroborated evidence or another audited Byzantine-resilient design exists. | One configured Testnet-10 source can still provide consistently false evidence. |
 | Selected-chain reorganization or pruned history | The durable observer resumes from a stable checkpoint, journals removals before additions, rolls back derived state, and accepts only one verified successor. Incomplete continuity becomes unavailable. A removed refund restores refund-only state. | Recovery can remain blocked until a complete authoritative selected-chain history is available. |
+| Exact attempt is released on unrelated conflict evidence | The signed artifact retains its funding input outpoints. Permanent absence requires trusted confirmation that a different transaction spent one of those exact inputs; unrelated conflicts and missing observations remain unknown. | A pending attempt remains unavailable while evidence is inconclusive. |
+| Facilitator or selected-chain resource exhaustion | Facilitator streams have whole-body byte, structure, deadline, and abort limits. Selected-chain traversal has cumulative byte, block, page, and remote-operation bounds and fails closed instead of truncating. | Limits are deployment policy and require monitoring as traffic and chain history grow. |
+| Multi-process admission oversubscribes local limits | The core `DirectModeServer` controller is process-local unless its host coordinates admission. The reference Worker acquires renewable deployment-wide leases from its single named `GatewayState` Durable Object. Other multi-instance deployments must supply an equivalent distributed limiter. | The hosted cross-isolate path is not yet production load-tested; every topology must prove its own coordination boundary. |
+| Completed attempts permanently consume active quota | After bounded terminal retention, full attempts leave active admission quotas while immutable O(1) replay tombstones remain. | Tombstone storage grows monotonically and requires separate provisioning and monitoring; it cannot be evicted to admit work. |
 | Funding source policy bypass | Client code checks required funding source against adapter-reported funding source. | Wallet and treasury adapters still require independent audit. |
 | Malicious facilitator widens capability | Facilitator supported kinds are intersected with direct-mode server capability and explicit action settlers. | Hosted facilitators need authentication, rate limits, and tenant isolation. |
 | Covenant template drift | Escrow fixture checks and transaction-v1 vectors pin script public key, state, covenant binding, fee, and output behavior. | Mainnet requires an independent covenant and transaction-builder audit. |
@@ -79,14 +90,14 @@ Required checks include:
 The Alpha.11 batch profile uses one singleton KIP-20 covenant lineage and
 lifetime cumulative vouchers. Define:
 
-- A: lifetime actual charges durably committed by the application;
+- A: lifetime fixed charges durably committed by the application;
 - S: lifetime gross amount settled on-chain, including claim fees;
 - T: latest buyer-signed lifetime settlement ceiling;
 - V: value of the current covenant UTXO;
 - R: advertised minimum covenant value retained beyond remaining authorization.
 
 At voucher acceptance the server must enforce `0 <= S <= A <= T` and
-`(T - S) + R <= V`. Here `A - S` is the outstanding actual charge and `T - S`
+`(T - S) + R <= V`. Here `A - S` is the outstanding committed charge and `T - S`
 is authorization headroom. All values are non-negative decimal sompi strings no
 greater than signed-int64 maximum (`9223372036854775807`).
 

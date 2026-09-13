@@ -108,6 +108,16 @@ Invalid verification returns:
 }
 ```
 
+### Transport Admission
+
+Facilitator POST bodies MUST be bounded before verification or settlement.
+Hosts must enforce declared and streamed byte limits, the shared JSON
+structural budget, one finite deadline covering the complete body read, and
+caller cancellation. Resetting a timeout for each chunk is insufficient: a
+slow or stalled stream must fail before payment verification, chain access, or
+protected work. The reference implementation uses a 10-second overall body
+deadline unless the host configures another finite positive value.
+
 `POST /settle` applies the scheme-specific success step:
 
 - `exact`: verify the signed transaction artifact for the selected profile,

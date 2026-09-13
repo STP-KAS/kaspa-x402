@@ -524,7 +524,7 @@ function batchLanePreview(accepted) {
   const signedMaxClaimable = batchBigInt(ui.signedMax.value, "T");
   const reserve = batchBigInt(accepted.extra.claimReserveSompi, "R");
   const claimAmount = batchBigInt(ui.partialClaim.value, "partial claim D");
-  const maximumNewCharge = BigInt(
+  const fixedCharge = BigInt(
     canonicalBatchAmount(accepted.amount, "batch request amount"),
   );
 
@@ -538,16 +538,16 @@ function batchLanePreview(accepted) {
     throw new Error("Batch lane invariant failed: (T - S) + R cannot exceed V.");
   }
 
-  const chargedAfterWork = chargedCumulativeAmount + maximumNewCharge;
-  if (chargedAfterWork > signedMaxClaimable) {
+  const chargedAfterWork = chargedCumulativeAmount + fixedCharge;
+  if (chargedAfterWork !== signedMaxClaimable) {
     throw new Error(
-      "The signed lifetime ceiling T does not cover A plus this request's maximum charge.",
+      "Signed cumulative authorization T must equal A plus this request's fixed charge.",
     );
   }
   const outstandingAfterWork = chargedAfterWork - claimedCumulativeAmount;
   if (claimAmount <= 0n || claimAmount > outstandingAfterWork) {
     throw new Error(
-      "Partial claim D must be positive and no greater than the outstanding actual charge after this request.",
+      "Partial claim D must be positive and no greater than the outstanding committed charge after this request.",
     );
   }
   if (claimAmount > signedMaxClaimable - claimedCumulativeAmount) {
@@ -618,7 +618,7 @@ function batchLanePreview(accepted) {
       },
       afterSuccessfulWork: {
         A: chargedAfterWork.toString(),
-        outstandingActualCharge: outstandingAfterWork.toString(),
+        outstandingCommittedCharge: outstandingAfterWork.toString(),
       },
       partialClaim: {
         D: claimAmount.toString(),

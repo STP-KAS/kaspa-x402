@@ -50,9 +50,10 @@ implementable from the specifications and vectors.
 `0.1.0-alpha.10` kept both exact profiles unchanged and replaced the batch
 binding with `kaspa-escrow-v2`: stable KIP-20 lineage, lifetime A/S/T
 accounting, partial claims, same-lineage top-ups, and an advertised claim
-reserve. `0.1.0-alpha.11` keeps that binding and cleanly replaces its covenant
-with `kaspa-x402-escrow-v3`, adds one-lineage-to-one-channel enforcement, and
-uses fresh runtime state with no older-alpha reader or migration.
+reserve. `0.1.0-alpha.11` cleanly replaces that binding with
+`kaspa-escrow-v3` and its covenant with `kaspa-x402-escrow-v4`, adds
+one-lineage-to-one-channel enforcement, and uses fresh runtime state with no
+older-alpha reader or migration.
 
 `@kaspa-x402/facilitator` and `@kaspa-x402/cli` remain private for now. They
 are useful in the repository, but they should not be published until the public
@@ -112,7 +113,7 @@ explicitly authorized operator action:
 1. Freeze the approved source, then create the new immutable Alpha.11 snapshot
    and content lock. Do not modify an older snapshot.
 2. Put that complete candidate, including its snapshot and lock, in a clean
-   checkout and pass `npm run validate:release` with the v2 covenant consensus
+   checkout and pass `npm run validate:release` with the v3/v4 covenant consensus
    sequence and both exact and batch interop drift gates.
 3. Install and import the four real local tarballs in a clean temporary project,
    record their hashes, then stage, approve, and verify the npm packages.

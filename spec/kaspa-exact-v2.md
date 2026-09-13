@@ -612,6 +612,12 @@ MUST pair that operation with idempotent finalization so reserved inputs are
 released only after trusted terminal evidence. Deployments SHOULD also pin
 allowed origins, profiles, recipients, and a maximum amount before signing.
 
+The durable artifact MUST retain the exact funding input outpoints it spends.
+A conflicting spend proves permanent absence only when trusted confirmed
+evidence shows that a different transaction spent one of those persisted
+outpoints. An unrelated conflict, a missing lookup, or a transport failure is
+`unknown` and MUST NOT release the attempt or authorize a replacement payment.
+
 `PAYMENT-RESPONSE` is merchant acknowledgement, not chain-finality evidence.
 The client finalizes an exact attempt only after its trusted chain adapter proves
 the transaction, selected output, and configured confirmation threshold. A
@@ -683,6 +689,13 @@ ambiguous settlement. The implementation MUST retain consumed evidence, mark
 the affected standard transaction or additive head for reconciliation, and
 MUST NOT treat the payment as reusable merely because one node stopped
 reporting it.
+
+The Alpha.11 reference deployment trusts one configured Testnet-10 evidence
+source at a time. Endpoint failover improves availability but is not
+independent corroboration and does not make a faulty source Byzantine-safe.
+Mainnet enablement requires independently corroborated chain evidence or
+another audited Byzantine-resilient design; unavailable or disagreeing
+evidence MUST fail closed.
 
 ## SettlementResponse
 

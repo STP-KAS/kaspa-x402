@@ -1295,6 +1295,7 @@ describe("KaspaPnnClient", () => {
         page += 1;
         const blockHash = page.toString(16).padStart(64, "0");
         return {
+          ignoredPadding: "x".repeat(320 * 1024),
           removedChainBlockHashes: [],
           addedChainBlockHashes: [blockHash],
           chainBlockAcceptedTransactions: [
@@ -1303,7 +1304,6 @@ describe("KaspaPnnClient", () => {
                 hash: blockHash,
                 blueScore: "1071",
                 daaScore: "1071",
-                padding: "x".repeat(320 * 1024),
               },
               acceptedTransactions: [],
             },

@@ -55,7 +55,8 @@ Servers should require the x402 `payment-identifier` extension for paid HTTP ret
 Servers may include multiple Kaspa entries in `PaymentRequired.accepts`. Clients should prefer:
 
 - `exact` for fixed-price one-shot purchases;
-- `batch-settlement` when an existing escrow/channel can pay for repeated or variable-cost requests.
+- `batch-settlement` when an existing escrow/channel can pay for repeated
+  requests whose charge is fixed and approved before each invocation.
 
 If the server returns a corrective `402` for `batch-settlement`, it should
 include `accepts[].extra.channelState` with the stable `covenantId` and current

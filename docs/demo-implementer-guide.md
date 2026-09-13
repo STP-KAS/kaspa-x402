@@ -173,9 +173,9 @@ additions, and accept only one verified successor. Missing or pruned continuity
 keeps the lane unavailable; REST UTXO presence or peer channel metadata is not
 enough.
 
-For one lane define A as lifetime actual charges, S as lifetime gross on-chain
-settlement including claim fees, V as current covenant value, and R as the
-server-advertised minimum successor reserve `claimReserveSompi`. Voucher
+For one lane define A as lifetime committed fixed charges, S as lifetime gross
+on-chain settlement including claim fees, V as current covenant value, and R as
+the server-advertised minimum successor reserve `claimReserveSompi`. Voucher
 acceptance requires:
 
 ```text
@@ -183,7 +183,7 @@ acceptance requires:
 (T - S) + R <= V
 ```
 
-`A - S` is outstanding actual charge and `T - S` is authorization headroom. A
+`A - S` is outstanding committed charge and `T - S` is authorization headroom. A
 claim spends one same-ID input and creates one same-ID successor. If D is the
 gross claim and F is the transaction fee, the provider receives `D - F`, the
 successor value is `V - D`, and successor state becomes `S + D`. A top-up also
