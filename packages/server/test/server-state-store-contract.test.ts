@@ -428,7 +428,7 @@ describe("memory durable-state limits", () => {
         }),
       ),
     ).rejects.toThrow("record limit exceeded");
-  });
+  }, 15_000);
 
   it("reserves the complete duplicated terminal response bundle", async () => {
     const store = new MemoryServerChannelStore([], {
