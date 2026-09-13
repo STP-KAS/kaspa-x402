@@ -832,12 +832,26 @@ export class KaspaPnnClient {
           "High",
         );
         const after = await pnnChainCheckpoint(rpc, this.#timeoutMs);
-        if (sameChainCheckpoint(before, after)) {
+        const rawVerifiedCheckpoint = await withTimeout(
+          rpc.getBlock({ hash: before.blockHash, includeTransactions: false }),
+          this.#timeoutMs,
+          "pnn recheck lineage checkpoint",
+        );
+        const verifiedCheckpoint = pnnSelectedBlockCheckpoint(
+          rawVerifiedCheckpoint,
+          before.blockHash,
+          "lineage proof checkpoint",
+        );
+        if (
+          sameChainCheckpoint(before, verifiedCheckpoint) &&
+          BigInt(after.blueScore) >= BigInt(before.blueScore) &&
+          BigInt(after.daaScore) >= BigInt(before.daaScore)
+        ) {
           return covenantUpdateFromPnnSelection(request, selected, after);
         }
       }
       throw invalidTransaction(
-        "Kaspa PNN selected-chain checkpoint changed during every bounded read",
+        "Kaspa PNN lineage proof checkpoint changed during every bounded read",
       );
     });
   }
