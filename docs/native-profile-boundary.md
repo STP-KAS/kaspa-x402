@@ -35,11 +35,9 @@ channel's `covenantId` stable across successors and enforces its lineage. The
 runtime separately persists the current outpoint because a `covenantId` does
 not provide reverse lookup of the live UTXO.
 
-v1 RC1 replaces the earlier active batch binding and channel state outright.
-No active runtime compatibility reader or migration exists for older alpha
-channels. Published alpha releases remain immutable historical snapshots, not
-compatibility targets. Both active schemes are Testnet-10 only; the exact
-profiles and their `kaspa-exact-v2` binding are otherwise unchanged.
+v1 RC1 uses a clean batch binding and state model. No runtime compatibility
+reader or migration exists for pre-RC channels. Both active schemes are
+Testnet-10 only.
 
 ## Absent Upstream Schemes
 

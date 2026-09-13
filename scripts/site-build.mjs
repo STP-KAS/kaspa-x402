@@ -6,15 +6,11 @@ import { isPublishableDirtyPath } from "./site-inputs.mjs";
 import { fileURLToPath } from "node:url";
 
 import {
-  ACTIVE_REDIRECTS,
   ARTIFACT_NOTES,
   CONTRACT_FILES,
   DOC_GROUPS,
   PUBLIC_DOC_FILES,
   PUBLISHABLE_PACKAGES,
-  RELEASE_DOC_FILES,
-  RELEASE_LOCK_DIR,
-  RELEASE_SNAPSHOT_DIR,
   SITE_ASSET_FILES,
   SCHEMA_FILES,
   SITE_BASE_URL,
@@ -34,7 +30,6 @@ const schemaFiles = SCHEMA_FILES;
 const specFiles = SPEC_FILES;
 const contractFiles = CONTRACT_FILES;
 const docFiles = PUBLIC_DOC_FILES;
-const releaseDocFiles = RELEASE_DOC_FILES;
 const htmlSourceFiles = new Set([...specFiles, ...docFiles]);
 const vectorFiles = trackedFiles("vectors").filter(
   (file) => file.endsWith(".json") || file.endsWith(".md"),
@@ -50,6 +45,7 @@ const siteScriptFiles = [
   "scripts/site-build.mjs",
   "scripts/site-check.mjs",
   "scripts/site-config.mjs",
+  "scripts/site-inputs.mjs",
   "scripts/site-serve.mjs",
 ];
 const packages = readPackages();
@@ -59,25 +55,15 @@ const publicPackages = packages.filter((pkg) =>
 const repositoryUrl = normalizeRepositoryUrl(
   readJson("package.json").repository?.url,
 );
-const releaseVersion =
-  packages.find((pkg) => pkg.name === "@kaspa-x402/core")?.version ??
-  "0.1.0-alpha.1";
-const releasePath = `v${releaseVersion}`;
-const releaseEntries = buildReleaseEntries();
+const releaseVersion = packages.find(
+  (pkg) => pkg.name === "@kaspa-x402/core",
+)?.version;
+if (releaseVersion === undefined)
+  throw new Error("missing @kaspa-x402/core release version");
 const commit = git(["rev-parse", "HEAD"]);
 const commitDate = git(["show", "-s", "--format=%cI", "HEAD"]);
 const dirtyInputs = dirtyPublishableInputs();
 const sourceState = dirtyInputs.length > 0 ? "working-tree-dirty" : "git-head";
-const releaseSnapshotScope =
-  "schemas, specs, covenant artifacts, selected docs, vectors, package metadata, and release metadata";
-const activePrereleaseOnlyRoutes = [
-  "/",
-  "/demo/",
-  "/assets/",
-  "/vendor/",
-  "/site-manifest.json",
-  "/releases/",
-];
 
 if (requireClean && dirtyInputs.length > 0) {
   throw new Error(
@@ -109,10 +95,9 @@ writeJson("packages.json", {
   releaseVersion,
   packages: publicPackages,
 });
+writeJson("release.json", currentRelease());
 
 writeIndexPages();
-writeReleaseSnapshot(releaseArtifacts(copiedArtifacts), vectorIndex);
-copyStoredReleaseSnapshots();
 writeManifest(copiedArtifacts, vectorIndex);
 
 function writeIndexPages() {
@@ -121,7 +106,6 @@ function writeIndexPages() {
   writeSpecsPage();
   writeDocsPage();
   writeVectorsPage();
-  writeReleasesPage();
   writeNotFoundPage();
   writeDemoPage();
   writePnnSpikeJson();
@@ -164,12 +148,12 @@ function writeHomePage() {
     <ul>
       <li>Current recommended Testnet release: <code>${escapeHtml(releaseVersion)}</code>, with draft specs, JSON schemas, conformance vectors, and TypeScript packages under the <code>rc</code> npm tag.</li>
       <li>Network target: <code>kaspa:testnet-10</code> only.</li>
-      <li>Hosted gateway: <a href="https://demo.kaspa-x402.org"><code>demo.kaspa-x402.org</code></a> runs <code>${escapeHtml(releaseVersion)}</code> on Testnet-10. The release completed a fresh funded 18-flow exact and batch run; the deployed gateway also passed a funded exact canary and its scheduled health checks. See the <a href="/docs/testnet-gateway/">gateway reference</a> for current evidence and historical release boundaries.</li>
+      <li>Hosted gateway: <a href="https://demo.kaspa-x402.org"><code>demo.kaspa-x402.org</code></a> runs <code>${escapeHtml(releaseVersion)}</code> on Testnet-10. The release completed a fresh funded 18-flow exact and batch run; the deployed gateway also passed a funded exact canary and its scheduled health checks. See the <a href="/docs/testnet-gateway/">gateway reference</a> for current evidence.</li>
       <li>Mainnet: blocked. <code>kaspa:mainnet</code> is a reserved profile name; the blocking gates are listed in <a href="/docs/mainnet-readiness/">mainnet readiness</a>. Do not use any of this with production funds.</li>
       <li>Standards: the <code>kaspa:*</code> network identifiers are draft binding names, not accepted x402 registry or CAIP entries.</li>
       <li>Stability: package names, schemas, and field names may change before stable <code>1.0.0</code>. See the <a href="/docs/versioning-policy/">versioning policy</a>.</li>
     </ul>
-    <p class="muted">Generated from commit <code>${escapeHtml(commit.slice(0, 12))}</code> (${escapeHtml(commitDate.slice(0, 10))}). Unversioned routes track the active prerelease; immutable snapshots are listed under <a href="/releases/">releases</a>.</p>
+    <p class="muted">Generated from commit <code>${escapeHtml(commit.slice(0, 12))}</code> (${escapeHtml(commitDate.slice(0, 10))}). <a href="/release.json"><code>release.json</code></a> identifies the current release.</p>
 
     <h2>What is x402</h2>
     <p>x402 is an open protocol that turns the HTTP <code>402 Payment Required</code> status code into a machine-payable flow: a server answers an unpaid request with a 402 carrying a machine-readable offer, the client retries with a signed payment payload, and the server verifies the payment, settles it, and serves the response. The same primitives work over HTTP headers and MCP <code>_meta</code> fields, so paid APIs and tools are usable by autonomous agents. See <a href="https://www.x402.org">x402.org</a>.</p>
@@ -252,7 +236,7 @@ function writeSpecsPage() {
       `
   <main>
     <h1>Spec</h1>
-    <p>Current binding and transport documents, in suggested reading order. Historical versions remain available in the immutable <a href="/releases/">release snapshots</a>.</p>
+    <p>Current binding and transport documents, in suggested reading order.</p>
     ${statusLine()}
     ${annotatedTable("Document", rows, { hashes: false })}
   </main>
@@ -351,35 +335,6 @@ function writeVectorsPage() {
   );
 }
 
-function writeReleasesPage() {
-  const rows = releaseEntries
-    .map((entry) => {
-      const path = `v${entry.version}`;
-      const hash = entry.contentSha256
-        ? `<code>${escapeHtml(entry.contentSha256.slice(0, 16))}</code>`
-        : "active build";
-      return `<tr><td><code>${escapeHtml(entry.version)}</code></td><td><a href="/${path}/"><code>/${path}/</code></a></td><td><a href="/${path}/release.json"><code>release.json</code></a></td><td>${hash}</td></tr>`;
-    })
-    .join("");
-  writeHtml(
-    "releases/index.html",
-    layout(
-      "Releases",
-      `
-  <main>
-    <h1>Releases</h1>
-    <p>Immutable snapshots of the published surface, one per release. Unversioned routes track the active prerelease; snapshot content is hash-locked.</p>
-    <p>Install <code>${escapeHtml(releaseVersion)}</code>, the current recommended Testnet release, with <code>@rc</code> or its exact version.</p>
-    <div class="table-wrap"><table>
-      <thead><tr><th>Version</th><th>Snapshot</th><th>Metadata</th><th>Lock</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div>
-  </main>
-      `,
-    ),
-  );
-}
-
 function writeNotFoundPage() {
   writeHtml(
     "404.html",
@@ -388,7 +343,7 @@ function writeNotFoundPage() {
       `
   <main>
     <h1>Not Found</h1>
-    <p>The requested page is not published on this site. Use <a href="/releases/">releases</a> for immutable snapshots or return to the <a href="/">current prerelease reference</a>.</p>
+    <p>The requested page is not published on this site. Return to the <a href="/">current release candidate</a>.</p>
   </main>
       `,
     ),
@@ -403,7 +358,7 @@ function writeDemoPage() {
       `
   <main>
     <h1>Browser Test Client</h1>
-    <p class="muted">Testnet-only browser client for inspecting Kaspa x402 offers, checking public-node connectivity, and rehearsing exact or v1 RC1 batch payment headers. The hosted gateway at <a href="https://demo.kaspa-x402.org"><code>demo.kaspa-x402.org</code></a> runs <code>${escapeHtml(releaseVersion)}</code> on Testnet-10 with recorded funded and scheduled canary evidence. See the <a href="/docs/testnet-gateway/">gateway reference</a> for current evidence and historical release boundaries.</p>
+    <p class="muted">Testnet-only browser client for inspecting Kaspa x402 offers, checking public-node connectivity, and rehearsing exact or v1 RC1 batch payment headers. The hosted gateway at <a href="https://demo.kaspa-x402.org"><code>demo.kaspa-x402.org</code></a> runs <code>${escapeHtml(releaseVersion)}</code> on Testnet-10 with recorded funded and scheduled canary evidence. See the <a href="/docs/testnet-gateway/">gateway reference</a> for current evidence.</p>
 
     <section class="demo-panel" aria-labelledby="demo-safety">
       <h2 id="demo-safety">Safety Boundary</h2>
@@ -711,22 +666,6 @@ function copyCollection(files, routeRoot) {
   });
 }
 
-function releaseArtifacts(copiedArtifacts) {
-  const releaseSources = [
-    ...schemaFiles,
-    ...specFiles,
-    ...contractFiles,
-    ...releaseDocFiles,
-    ...vectorFiles,
-  ];
-  const copiedBySource = new Map(
-    copiedArtifacts.map((artifact) => [artifact.source, artifact]),
-  );
-  return releaseSources.map(
-    (source) => copiedBySource.get(source) ?? artifactRecord(source, source),
-  );
-}
-
 function copyStaticAssets() {
   copyFile("site/src/styles.css", "assets/styles.css");
   for (const file of SITE_ASSET_FILES) {
@@ -734,114 +673,18 @@ function copyStaticAssets() {
   }
 }
 
-function writeReleaseSnapshot(copiedArtifacts, vectorIndex) {
-  const releaseLock = readReleaseLock(releaseVersion);
-  if (releaseLock?.frozen === true) {
-    const source = path.join(root, RELEASE_SNAPSHOT_DIR, releasePath);
-    if (!fs.existsSync(source)) {
-      throw new Error(
-        `frozen release ${releaseVersion} is missing ${RELEASE_SNAPSHOT_DIR}/${releasePath}`,
-      );
-    }
-    const target = path.join(outDir, releasePath);
-    fs.rmSync(target, { recursive: true, force: true });
-    fs.cpSync(source, target, { recursive: true });
-    return;
-  }
-  const releaseArtifacts = [];
-  for (const artifact of copiedArtifacts) {
-    const target = `${releasePath}/${artifact.target}`;
-    copyFile(artifact.source, target);
-    releaseArtifacts.push({ ...artifact, target });
-  }
-  const releasePackages = releasePackagesMetadata();
-  writeJson(`${releasePath}/packages.json`, releasePackages);
-  writeJson(`${releasePath}/vectors/index.json`, vectorIndex);
-  writeHtml(`${releasePath}/index.html`, releaseIndexHtml(releaseArtifacts));
-
-  const releaseProvenance =
-    dirtyInputs.length > 0
-      ? {
-          generatedFrom: commit,
-          commitDate,
-          sourceState,
-          dirtyInputs,
-        }
-      : {
-          sourceState: "locked",
-          dirtyInputs: [],
-        };
-  const lockedRelease = releaseMetadata(releaseLock, releaseArtifacts, {
-    sourceState: "locked",
-    dirtyInputs: [],
-  });
-  const contentSha256 = releaseContentHash(lockedRelease);
-  if (!releaseLock && (requireClean || dirtyInputs.length === 0)) {
-    throw new Error(
-      `release ${releaseVersion} is missing a content lock in ${RELEASE_LOCK_DIR}`,
-    );
-  }
-  if (
-    releaseLock &&
-    releaseLock.contentSha256 !== contentSha256 &&
-    (requireClean || dirtyInputs.length === 0)
-  ) {
-    throw new Error(
-      `release ${releaseVersion} content differs from ${releaseLock.path}; bump the package version or update the release lock`,
-    );
-  }
-
-  const release = {
-    ...releaseMetadata(releaseLock, releaseArtifacts, releaseProvenance),
-    contentSha256,
-  };
-
-  writeJson(`${releasePath}/release.json`, release);
-}
-
-function copyStoredReleaseSnapshots() {
-  for (const entry of releaseEntries) {
-    const snapshotPath = `v${entry.version}`;
-    if (snapshotPath === releasePath) continue;
-    const source = path.join(root, RELEASE_SNAPSHOT_DIR, snapshotPath);
-    if (!fs.existsSync(source)) {
-      throw new Error(
-        `release ${entry.version} is locked but missing ${RELEASE_SNAPSHOT_DIR}/${snapshotPath}`,
-      );
-    }
-    const target = path.join(outDir, snapshotPath);
-    fs.rmSync(target, { recursive: true, force: true });
-    fs.cpSync(source, target, { recursive: true });
-  }
-}
-
-function releaseMetadata(releaseLock, releaseArtifacts, releaseProvenance) {
+function currentRelease() {
   return {
     version: releaseVersion,
-    ...releaseProvenance,
-    contentLock: releaseLock?.path,
-    snapshotScope: releaseSnapshotScope,
-    activePrereleaseOnlyRoutes,
-    unversionedRoutes:
-      "active prerelease; not part of the immutable release snapshot",
+    channel: "rc",
+    network: "kaspa:testnet-10",
+    generatedFrom: commit,
+    commitDate,
+    sourceState,
+    dirtyInputs,
     npmInstall: releaseNpmInstall(),
-    artifacts: releaseArtifacts,
+    packages: publicPackages,
   };
-}
-
-function releaseIndexHtml(releaseArtifacts) {
-  return snapshotLayout(
-    `Release ${releaseVersion}`,
-    `
-      <main>
-        <h1>Release ${escapeHtml(releaseVersion)}</h1>
-        <p>Status: locked prerelease snapshot for this version. Machine-readable metadata is available at <a href="/${releasePath}/release.json"><code>/${releasePath}/release.json</code></a>.</p>
-        <p>This snapshot locks ${escapeHtml(releaseSnapshotScope)}. The browser test client, shared site assets, vendored browser SDK files, and package index route remain mutable prerelease routes.</p>
-        <p>Release-candidate consumers should pin this versioned path.</p>
-        ${artifactTable(releaseArtifacts)}
-      </main>
-    `,
-  );
 }
 
 function writeManifest(copiedArtifacts, vectorIndex) {
@@ -851,16 +694,8 @@ function writeManifest(copiedArtifacts, vectorIndex) {
     commitDate,
     sourceState,
     dirtyInputs,
-    releaseSnapshotScope,
-    activePrereleaseOnlyRoutes,
     releaseVersion,
-    releasePath,
-    releases: releaseEntries.map((entry) => ({
-      version: entry.version,
-      path: `/v${entry.version}/`,
-      metadata: `/v${entry.version}/release.json`,
-      contentSha256: entry.contentSha256,
-    })),
+    releaseMetadata: "/release.json",
     schemas: schemaFiles.map((file) => ({
       path: `/${file}`,
       sha256: sha256File(path.join(root, file)),
@@ -942,10 +777,10 @@ function layout(title, body, options = {}) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(fullTitle)}</title>
-  <meta name="description" content="Proposed native Kaspa bindings for x402 payments: schemas, specs, conformance vectors, docs, and release snapshots.">
+  <meta name="description" content="Proposed native Kaspa bindings for x402 payments: schemas, specs, conformance vectors, and docs.">
   <meta property="og:type" content="website">
   <meta property="og:title" content="${escapeHtml(fullTitle)}">
-  <meta property="og:description" content="Proposed native Kaspa bindings for x402 payments: schemas, specs, conformance vectors, docs, and release snapshots.">
+  <meta property="og:description" content="Proposed native Kaspa bindings for x402 payments: schemas, specs, conformance vectors, and docs.">
   <meta property="og:image" content="${SITE_BASE_URL}/assets/og.png">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="stylesheet" href="/assets/styles.css">
@@ -960,42 +795,11 @@ ${options.head ?? ""}
       <a href="/vectors/">Vectors</a>
       <a href="/docs/">Docs</a>
       <a href="/demo/">Demo</a>
-      <a href="/releases/">Releases</a>
       <a href="${repositoryUrl}">GitHub</a>
     </nav>
   </header>
   ${body}
   <footer>Prerelease standards reference for the Kaspa x402 binding. This domain does not host a custodial wallet, hosted signer, facilitator, or payment API.</footer>
-</body>
-</html>`;
-}
-
-function snapshotLayout(title, body) {
-  const fullTitle = title === "Kaspa x402" ? title : `${title} — Kaspa x402`;
-  const content = body.trim();
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(fullTitle)}</title>
-  <meta name="description" content="Proposed native Kaspa bindings for x402 payments: schemas, specs, conformance vectors, docs, and release snapshots.">
-  <link rel="stylesheet" href="/assets/styles.css">
-</head>
-<body>
-  <header>
-    <a class="site" href="/">Kaspa x402</a>
-    <nav aria-label="Primary">
-      <a href="/spec/">Spec</a>
-      <a href="/schemas/">Schemas</a>
-      <a href="/vectors/">Vectors</a>
-      <a href="/docs/">Docs</a>
-      <a href="/releases/">Releases</a>
-      <a href="${repositoryUrl}">GitHub</a>
-    </nav>
-  </header>
-${content}
-  <footer>Prerelease standards reference for the Kaspa x402 binding. This domain does not host a wallet, signer, facilitator, or payment API.</footer>
 </body>
 </html>`;
 }
@@ -1139,16 +943,6 @@ function rewriteMarkdownHref(href, sourceDir) {
   return href;
 }
 
-function artifactTable(artifacts) {
-  const rows = artifacts
-    .map(
-      (artifact) =>
-        `<tr><td><a href="/${artifact.target}"><code>${escapeHtml(artifact.target)}</code></a></td><td><code>${artifact.sha256.slice(0, 16)}</code></td></tr>`,
-    )
-    .join("");
-  return `<div class="table-wrap"><table><thead><tr><th>Artifact</th><th>SHA-256 prefix</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-}
-
 function writeHeaders() {
   writeText(
     "_headers",
@@ -1169,7 +963,9 @@ function writeHeaders() {
 /demo/index.html
   Cache-Control: public, max-age=300, must-revalidate, no-transform
 
-${releaseHeaderBlocks()}
+/release.json
+  Content-Type: application/json; charset=utf-8
+  Cache-Control: public, max-age=300, must-revalidate
 
 /packages.json
   Content-Type: application/json; charset=utf-8
@@ -1208,54 +1004,11 @@ ${releaseHeaderBlocks()}
   );
 }
 
-function releaseHeaderBlocks() {
-  return releaseEntries
-    .map((entry) => {
-      const path = `v${entry.version}`;
-      return `/${path}/schemas/*.json
-  Content-Type: application/schema+json; charset=utf-8
-  Cache-Control: public, max-age=31536000, immutable
-
-/${path}/
-  Cache-Control: public, max-age=31536000, immutable
-
-/${path}/index.html
-  Cache-Control: public, max-age=31536000, immutable
-
-/${path}/spec/*
-  Cache-Control: public, max-age=31536000, immutable
-
-/${path}/docs/*
-  Cache-Control: public, max-age=31536000, immutable
-
-/${path}/vectors/*
-  Cache-Control: public, max-age=31536000, immutable
-
-/${path}/release.json
-  Content-Type: application/json; charset=utf-8
-  Cache-Control: public, max-age=31536000, immutable
-
-/${path}/packages.json
-  Content-Type: application/json; charset=utf-8
-  Cache-Control: public, max-age=31536000, immutable
-
-/${path}/vectors/index.json
-  Content-Type: application/json; charset=utf-8
-  Cache-Control: public, max-age=31536000, immutable`;
-    })
-    .join("\n\n");
-}
-
 function writeRedirects() {
-  const activeRedirects = ACTIVE_REDIRECTS.map(
-    ({ from, to, status }) => `${from} ${to} ${status}`,
-  ).join("\n");
   writeText(
     "_redirects",
     `/schema/* /schemas/:splat 301
 /specs/* /spec/:splat 301
-/latest/* /:splat 302
-${activeRedirects}
 `,
   );
 }
@@ -1297,15 +1050,13 @@ function dirtyPublishableInputs() {
     ...sitePackageFiles(),
     ...siteScriptFiles,
     ...siteSourceInputs(),
-    ...listFiles(RELEASE_LOCK_DIR),
-    ...trackedFiles(RELEASE_LOCK_DIR),
   ]);
   return git(["status", "--porcelain=v1", "--untracked-files=all"])
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => line.slice(3).trim())
     .map((file) => file.replace(/^"|"$/g, ""))
-    .filter((file) => isPublishableDirtyPath(file, inputs, RELEASE_LOCK_DIR))
+    .filter((file) => isPublishableDirtyPath(file, inputs))
     .sort();
 }
 
@@ -1322,82 +1073,8 @@ function sitePackageFiles() {
   );
 }
 
-function readReleaseLock(version) {
-  const relativePath = `${RELEASE_LOCK_DIR}/v${version}.json`;
-  const fullPath = path.join(root, relativePath);
-  if (!fs.existsSync(fullPath)) return undefined;
-  return {
-    ...JSON.parse(fs.readFileSync(fullPath, "utf8")),
-    path: relativePath,
-  };
-}
-
-function readReleaseLocks() {
-  return listFiles(RELEASE_LOCK_DIR)
-    .filter((file) => /^site\/releases\/v[^/]+\.json$/.test(file))
-    .map((file) => ({ ...readJson(file), path: file }))
-    .sort((a, b) => compareVersions(a.version, b.version));
-}
-
-function buildReleaseEntries() {
-  const entries = readReleaseLocks();
-  if (!entries.some((entry) => entry.version === releaseVersion)) {
-    entries.push({
-      version: releaseVersion,
-      contentSha256: undefined,
-      path: `${RELEASE_LOCK_DIR}/v${releaseVersion}.json`,
-    });
-  }
-  return entries.sort((a, b) => compareVersions(a.version, b.version));
-}
-
-function compareVersions(left, right) {
-  return String(left).localeCompare(String(right), "en", { numeric: true });
-}
-
-function releasePackagesMetadata() {
-  return { releaseVersion, packages };
-}
-
 function releaseNpmInstall() {
   return PUBLISHABLE_PACKAGES.map((name) => `${name}@${releaseVersion}`);
-}
-
-function releaseContentHash(lockedRelease) {
-  const records = listFiles(`${SITE_DIST}/${releasePath}`)
-    .map((file) => path.join(root, file))
-    .map((file) => ({
-      file,
-      target: path.relative(outDir, file).replaceAll(path.sep, "/"),
-    }))
-    .filter(({ target }) => target !== `${releasePath}/release.json`)
-    .map(({ file, target }) => fileRecord(target, file));
-  records.push(
-    contentRecord(`${releasePath}/release.json`, jsonText(lockedRelease)),
-  );
-  return crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify(records.sort((a, b) => a.target.localeCompare(b.target))),
-    )
-    .digest("hex");
-}
-
-function fileRecord(target, file) {
-  return {
-    target,
-    bytes: fs.statSync(file).size,
-    sha256: sha256File(file),
-  };
-}
-
-function contentRecord(target, value) {
-  const buffer = Buffer.from(value);
-  return {
-    target,
-    bytes: buffer.byteLength,
-    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
-  };
 }
 
 function jsonText(value) {

@@ -2,9 +2,7 @@
 
 Status: active v1 RC1 exact binding
 
-This document defines the Kaspa network binding for x402 v2 `exact`. It
-supersedes `kaspa-exact-v1` for new implementations while preserving the v1
-document and immutable alpha.7 release evidence as historical records.
+This document defines the active Kaspa network binding for x402 v2 `exact`.
 
 ## Summary
 
@@ -253,9 +251,8 @@ the exact equality above. A larger successor delta is an overpayment and MUST
 be rejected.
 
 The merchant receives exactly `amount` through the successor increase. The
-payer spends exactly `amount + fee`. The previous alpha.7 construction that
-combined a threshold top-up with a separate merchant output is not valid under
-this binding.
+payer spends exactly `amount + fee`. A transaction that combines a threshold
+top-up with a separate merchant output is not valid under this binding.
 
 ## Transaction interchange and identifiers
 
@@ -812,5 +809,4 @@ unavailable_kaspa_exact_head
 - [KIP-9: Extended mass formula](https://github.com/kaspanet/kips/blob/master/kip-0009.md)
 - [KIP-10: Transaction introspection opcodes](https://github.com/kaspanet/kips/blob/master/kip-0010.md)
 - [Rusty Kaspa](https://github.com/kaspanet/rusty-kaspa)
-- [Historical alpha.7 exact binding](/v0.1.0-alpha.7/spec/kaspa-exact-v1.md)
 - [Kaspa x402 Batch Settlement Binding v3](kaspa-batch-settlement-v3.md)

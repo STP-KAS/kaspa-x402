@@ -4,8 +4,8 @@ Status: release-candidate deployment plan for `kaspa-x402.org`. This document is
 and is not published on the site.
 
 `kaspa-x402.org` is the canonical standards reference for the Kaspa x402
-binding. It hosts schemas, specs, vectors, selected docs, package links,
-release snapshots, and a static testnet-only browser client. It must not host a
+binding. It hosts the current schemas, specs, vectors, selected docs, package
+links, release metadata, and a static testnet-only browser client. It must not host a
 custodial wallet, hosted signer, facilitator, payment API, or protected paid
 resource on the apex domain.
 
@@ -35,14 +35,13 @@ no marketing sections. Every page exists for a reason:
   Deployment, Evidence, Safety, and Policy) of the selected public documents.
 - `/demo/` is a static, testnet-only browser client for PNN connectivity checks
   and local x402 transcript rehearsal. It is not a hosted gateway.
-- `/releases/` lists the immutable versioned snapshots.
 - `demo.kaspa-x402.org` is the separate Worker-backed testnet gateway. It is
   not hosted under the apex static site.
 
 There is no separate packages page; the package table lives on the homepage
 and `packages.json` remains the machine-readable route. Active indexes show
-one-line purpose annotations; immutable release metadata and conformance
-indexes retain content hashes. Prose on the homepage makes only claims that
+one-line purpose annotations; `/release.json` identifies the current release,
+and conformance indexes retain content hashes. Prose on the homepage makes only claims that
 are specified in this repository or backed by the published testnet evidence,
 and always states the prerelease/testnet-only status.
 
@@ -68,14 +67,8 @@ The apex site publishes:
 - conformance vectors under `/vectors/`;
 - selected public docs under `/docs/`;
 - a static testnet browser client under `/demo/`;
-- immutable SemVer snapshots under `/v<version>/`, indexed at `/releases/`;
+- current release metadata at `/release.json`;
 - package metadata and source links on the homepage and at `/packages.json`.
-
-Release snapshots lock schemas, specs, selected docs, vectors, versioned
-package metadata, and release metadata. They do not lock the interactive
-browser client, shared CSS/JS assets, or vendored browser SDK files; those are
-mutable prerelease site routes and `site:check` enforces that they are not copied
-under versioned release paths.
 
 Ignored operational or planning files must not be published. This includes
 private live-run artifacts, local adapter files, review drafts, findings

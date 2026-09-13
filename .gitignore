@@ -3,6 +3,7 @@ dist/
 coverage/
 site/dist/
 .wrangler/
+packages/demo-gateway/worker-configuration.d.ts
 .env
 .env.*
 *.log

@@ -17,8 +17,10 @@
     "dist"
   ],
   "scripts": {
-    "build": "npm --workspace @kaspa-x402/core run build && npm --workspace @kaspa-x402/server run build && tsup src/index.ts --format esm --dts --clean",
-    "test": "npm --workspace @kaspa-x402/core run build && npm --workspace @kaspa-x402/server run build && vitest run"
+    "build": "npm --workspace @kaspa-x402/core run build && npm --workspace @kaspa-x402/server run build && npm run build:self",
+    "build:self": "tsup src/index.ts --format esm --dts --clean",
+    "test": "npm run build && npm run test:self",
+    "test:self": "vitest run"
   },
   "dependencies": {
     "@kaspa-x402/core": "1.0.0-rc.1",
