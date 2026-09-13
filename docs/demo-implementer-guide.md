@@ -7,8 +7,7 @@ This guide describes the published v1 RC1 source and deployed public gateway.
 The npm `rc` tag and `demo.kaspa-x402.org` both serve `1.0.0-rc.1`.
 
 v1 RC1 uses `kaspa-escrow-v3` / `kaspa-x402-escrow-v4` for batch settlement.
-The exact profiles are unchanged. Older alpha snapshots are historical artifacts
-only; clients must not send their batch payloads to the v1 RC1 runtime.
+Pre-RC batch payloads are not accepted.
 
 ## Start With The Artifacts
 

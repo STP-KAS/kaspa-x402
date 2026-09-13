@@ -1,6 +1,6 @@
 # Contributing
 
-Kaspa x402 is an alpha standard and reference implementation targeting
+Kaspa x402 is a release-candidate standard and reference implementation targeting
 `kaspa:testnet-10`. Nothing here is mainnet-ready, and package names, schemas,
 and field names may change until the first tagged spec release. Contributions
 should preserve that framing: no change may claim or imply production or
@@ -13,8 +13,6 @@ npm ci
 npm test
 npm run validate:schemas
 npm run site:build && npm run site:check
-npm --workspace @kaspa-x402/demo-gateway run build
-npm run pack:public:dry-run
 npm run check:diff
 ```
 
@@ -34,11 +32,11 @@ npm run check:demo-gateway
 
 ## CI Contract
 
-`.github/workflows/ci.yml` runs on every pull request and push to `main`:
-workspace tests, schema/vector validation, site build and publication checks,
-the gateway Worker dry-run build, the public-package pack dry-run, and diff
-hygiene. A pull request is not mergeable until CI is green. The Node version
-is pinned by `.node-version`.
+`.github/workflows/ci.yml` runs the routine checks on every pull request and
+push to `main`: workspace tests, schema validation, site checks, and diff
+hygiene. Release-only packaging, Worker, consensus, fixture, and funded proof
+checks belong to `npm run validate:release`, not every pull request. The Node
+version is pinned by `.node-version`.
 
 `.github/workflows/scheduled-checks.yml` runs the network-dependent integrity
 checks weekly: vendored kaspa-wasm hashes against the pinned upstream release
@@ -56,11 +54,8 @@ Answer these in the PR description:
 - What command verifies the change?
 - What vectors or tests changed with it?
 
-Changes to schemas, specs, or vectors alter the published release surface.
-Released snapshots are immutable: if locked artifacts change, the alpha
-version must be bumped and a new release lock and snapshot added — see
-`docs/versioning-policy.md`. Do not edit `site/releases/` locks or snapshots
-for an already-published version.
+Changes to schemas, specs, vectors, or published package behavior require a new
+version before publication; see `docs/versioning-policy.md`.
 
 ## Reporting Issues
 

@@ -14,9 +14,8 @@ Status: v1 release candidate. Everything targets `kaspa:testnet-10`. Mainnet use
 by the gates in [docs/mainnet-readiness.md](docs/mainnet-readiness.md), and
 reference runtimes require explicit `allowMainnet` opt-in. Package names,
 schemas, and field names may change before the stable `1.0.0` release.
-v1 RC1 is a clean replacement of the earlier batch binding: active runtimes
-do not read or migrate older-alpha channel state. Tagged alpha releases remain
-immutable historical snapshots.
+v1 RC1 is a clean replacement: active runtimes do not read or migrate
+pre-RC channel state.
 
 The binding ships two x402 schemes:
 
@@ -96,7 +95,7 @@ This is a deployment policy, not a universal Kaspa consensus-finality claim.
 
 ## Verify
 
-CI runs the full check suite on every pull request; see
+CI runs the routine check suite on every pull request; see
 [CONTRIBUTING.md](CONTRIBUTING.md). Locally:
 
 ```sh
@@ -138,12 +137,9 @@ Repository-only private workspaces: `@kaspa-x402/facilitator`,
 
 ## Security and Review
 
-See [docs/security-threat-model.md](docs/security-threat-model.md),
-[docs/review-closure-ledger.md](docs/review-closure-ledger.md), and
+See [docs/security-threat-model.md](docs/security-threat-model.md) and
 [docs/mainnet-readiness.md](docs/mainnet-readiness.md). Draft specs, package
-names, vectors, and live testnet proof do not imply mainnet readiness. The
-ecosystem-facing proposal is
-[docs/public-proposal.md](docs/public-proposal.md).
+names, vectors, and live testnet proof do not imply mainnet readiness.
 
 ## Reference Specs
 

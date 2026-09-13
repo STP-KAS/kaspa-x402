@@ -1,7 +1,6 @@
 # Domain language
 
 This glossary names the protocol concepts used by the active Kaspa x402 source.
-Historical release snapshots retain the language of the release they record.
 
 ## Exact payment
 
@@ -67,9 +66,8 @@ current outpoint separately.
 
 The current outpoint, remaining funding, committed-charge lifetime total, settled
 lifetime total, and latest buyer-signed lifetime ceiling for one batch covenant
-identity. v1 RC1 replaces the earlier active batch state outright; runtimes do
-not import or interpret older-alpha channel state. Historical tagged releases
-remain unchanged.
+identity. v1 RC1 uses a clean state model; runtimes do not import or interpret
+pre-RC channel state.
 
 The accounting shorthand is A for lifetime committed fixed charges, S for
 lifetime gross claimed, T for the latest buyer-signed lifetime ceiling, V for
