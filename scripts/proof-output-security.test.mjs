@@ -113,8 +113,10 @@ test("live proof scrubs output and restricts report and recovery permissions", (
     for (const secret of [rpcUrl, fundingWallet, "password", "query-secret"]) {
       assert.equal(combined.includes(secret), false, secret);
     }
-    assert.equal(fs.statSync(reportFile).mode & 0o777, 0o600);
-    assert.equal(fs.statSync(recoveryFile).mode & 0o777, 0o600);
+    if (process.platform !== "win32") {
+      assert.equal(fs.statSync(reportFile).mode & 0o777, 0o600);
+      assert.equal(fs.statSync(recoveryFile).mode & 0o777, 0o600);
+    }
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
