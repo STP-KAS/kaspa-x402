@@ -1,5 +1,4 @@
 export * from "./template.js";
-export * from "./source-bytes.js";
 export * from "./reproducibility.js";
 export * from "./tx-v1.js";
 export * from "./exact-v0.js";

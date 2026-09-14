@@ -8,8 +8,6 @@ import { fileURLToPath } from "node:url";
 
 import { blake2b } from "blakejs";
 
-import { sha256SilSource } from "./sil-source.mjs";
-
 const EXPECTED_COMPILER_COMMIT =
   "3ed973335b59269293564805cc2c58a14595ec03";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -138,7 +136,7 @@ const fixture = {
   format: "kaspa-x402-covenant-fixture-v4",
   templateId: "kaspa-x402-escrow-v4",
   source: sourceRelative,
-  sourceSha256: sha256SilSource(fs.readFileSync(source)),
+  sourceSha256: sha256(fs.readFileSync(source)),
   domainTag,
   domainTagHash,
   compiler: {

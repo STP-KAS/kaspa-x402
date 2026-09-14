@@ -4992,7 +4992,7 @@ export function persistExactPaymentAttempt(dataDir, record) {
   try {
     handle = fs.openSync(temporary, "wx", 0o600);
     fs.writeFileSync(handle, `${JSON.stringify(record, null, 2)}\n`);
-    fsyncHandle(handle);
+    fs.fsyncSync(handle);
     fs.closeSync(handle);
     handle = undefined;
     fs.linkSync(temporary, file);
@@ -5070,31 +5070,15 @@ export async function withExactPaymentStoreLock(dataDir, operation) {
   }
 }
 
-function isNonFatalFsync(error) {
-  return (
-    error?.code === "EPERM" ||
-    error?.code === "EISDIR" ||
-    error?.code === "EINVAL"
-  );
-}
-
-function fsyncHandle(handle) {
+function fsyncDirectory(directory) {
+  // Node cannot portably open and sync directories on Windows. File fsync
+  // remains mandatory; Windows does not get the directory durability guarantee.
+  if (process.platform === "win32") return;
+  const handle = fs.openSync(directory, "r");
   try {
     fs.fsyncSync(handle);
-  } catch (error) {
-    if (!isNonFatalFsync(error)) throw error;
-  }
-}
-
-function fsyncDirectory(directory) {
-  let handle;
-  try {
-    handle = fs.openSync(directory, "r");
-    fsyncHandle(handle);
-  } catch (error) {
-    if (!isNonFatalFsync(error)) throw error;
   } finally {
-    if (handle !== undefined) fs.closeSync(handle);
+    fs.closeSync(handle);
   }
 }
 

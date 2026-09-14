@@ -30,7 +30,6 @@ import {
   kip10AdditiveScriptPublicKey,
   parseKip10AdditiveRedeemScript,
   serializedScriptPublicKey,
-  sha256SilSource,
   voucherDigest,
   voucherPreimage,
 } from "../src/index.js";
@@ -58,7 +57,7 @@ describe("stateful escrow covenant template", () => {
     const item = fixture();
     const source = fs.readFileSync(path.join(repoRoot, item.source));
 
-    expect(sha256SilSource(source)).toBe(item.sourceSha256);
+    expect(crypto.createHash("sha256").update(source).digest("hex")).toBe(item.sourceSha256);
     expect(checkEscrowFixtureReproducibility(item, source).ok).toBe(true);
     expect(buildEscrowRedeemScript(item.sample.params)).toBe(item.sample.genesis.redeemScript);
 
@@ -77,7 +76,7 @@ describe("stateful escrow covenant template", () => {
     const source = fs.readFileSync(
       path.join(repoRoot, ESCROW_V4_SOURCE_PATH),
     );
-    const sourceHash = sha256SilSource(source);
+    const sourceHash = crypto.createHash("sha256").update(source).digest("hex");
     const compiledBaseHash = crypto
       .createHash("sha256")
       .update(Buffer.from(ESCROW_V4_COMPILED_BASE, "hex"))

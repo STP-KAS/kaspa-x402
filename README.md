@@ -166,6 +166,11 @@ about Kaspa consensus finality.
 CI runs the routine check suite on each pull request. Refer to
 [CONTRIBUTING.md](CONTRIBUTING.md) for more information.
 
+The Windows CI job runs workspace tests and offline proofs. On Windows, the
+reference adapter syncs payment files but skips directory sync, so these checks
+do not establish equivalent crash durability. Private proof files inherit Windows
+ACLs; the scripts only enforce owner-only POSIX permissions on other platforms.
+
 Run these commands to do the checks locally:
 
 ```sh
