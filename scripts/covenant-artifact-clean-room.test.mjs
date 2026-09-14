@@ -3,15 +3,13 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import test from "node:test";
 
-import { sha256SilSource } from "./sil-source.mjs";
-
 const source = fs.readFileSync("contracts/kaspa-x402-escrow-v4.sil");
 const fixture = JSON.parse(
   fs.readFileSync("contracts/fixtures/kaspa-x402-escrow-v4.json", "utf8"),
 );
 
 test("published artifacts reconstruct genesis and successor without project packages", () => {
-  assert.equal(sha256SilSource(source), fixture.sourceSha256);
+  assert.equal(sha256(source), fixture.sourceSha256);
 
   const genesis = renderRedeemScript(fixture.sample.params);
   assert.equal(genesis, fixture.sample.genesis.redeemScript);

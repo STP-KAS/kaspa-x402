@@ -10,6 +10,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Use Windows checkout line endings
+        run: git config --global core.autocrlf true
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Workspace tests
+        run: npm test
+      - name: Offline proofs
+        run: npm run proof:offline
   verify:
     runs-on: ubuntu-latest
     steps:
