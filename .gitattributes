@@ -1,0 +1,2 @@
+# Covenant source hashes identify exact LF bytes on every platform.
+*.sil text eol=lf

@@ -5071,6 +5071,9 @@ export async function withExactPaymentStoreLock(dataDir, operation) {
 }
 
 function fsyncDirectory(directory) {
+  // Node cannot portably open and sync directories on Windows. File fsync
+  // remains mandatory; Windows does not get the directory durability guarantee.
+  if (process.platform === "win32") return;
   const handle = fs.openSync(directory, "r");
   try {
     fs.fsyncSync(handle);
