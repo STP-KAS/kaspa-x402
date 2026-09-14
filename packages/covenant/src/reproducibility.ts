@@ -17,6 +17,7 @@ import {
   voucherDigest,
   voucherPreimage,
 } from "./template.js";
+import { sha256SilSource } from "./source-bytes.js";
 import type { EscrowTemplateParams, ScriptPublicKey } from "./template.js";
 
 export const ESCROW_FIXTURE_COMPILER_NAME = "silverc";
@@ -109,7 +110,7 @@ export function checkEscrowFixtureReproducibility(
   const checks: string[] = [];
 
   check(fixture.templateId === ESCROW_TEMPLATE_ID, "templateId");
-  check(sha256Hex(typeof source === "string" ? Buffer.from(source, "utf8") : source) === fixture.sourceSha256, "sourceSha256");
+  check(sha256SilSource(source) === fixture.sourceSha256, "sourceSha256");
   check(fixture.domainTag === ESCROW_VOUCHER_DOMAIN, "domainTag");
   check(fixture.domainTagHash === ESCROW_VOUCHER_DOMAIN_TAG, "domainTagHash");
   check(fixture.compiler.name === ESCROW_FIXTURE_COMPILER_NAME, "compiler.name");

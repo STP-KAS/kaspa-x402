@@ -1,0 +1,2 @@
+# Launch-identity SHA-256 is pinned to LF source bytes.
+*.sil text eol=lf

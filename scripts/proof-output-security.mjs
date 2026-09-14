@@ -51,7 +51,9 @@ export function writePrivateProofJson(file, value, options = {}) {
   fs.writeFileSync(resolved, stringifySanitizedProofOutput(value, options), {
     mode: 0o600,
   });
-  fs.chmodSync(resolved, 0o600);
+  if (process.platform !== "win32") {
+    fs.chmodSync(resolved, 0o600);
+  }
 }
 
 function sanitizeOperationalUrl(candidate) {

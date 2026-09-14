@@ -4992,7 +4992,7 @@ export function persistExactPaymentAttempt(dataDir, record) {
   try {
     handle = fs.openSync(temporary, "wx", 0o600);
     fs.writeFileSync(handle, `${JSON.stringify(record, null, 2)}\n`);
-    fs.fsyncSync(handle);
+    fsyncHandle(handle);
     fs.closeSync(handle);
     handle = undefined;
     fs.linkSync(temporary, file);
@@ -5070,12 +5070,31 @@ export async function withExactPaymentStoreLock(dataDir, operation) {
   }
 }
 
-function fsyncDirectory(directory) {
-  const handle = fs.openSync(directory, "r");
+function isNonFatalFsync(error) {
+  return (
+    error?.code === "EPERM" ||
+    error?.code === "EISDIR" ||
+    error?.code === "EINVAL"
+  );
+}
+
+function fsyncHandle(handle) {
   try {
     fs.fsyncSync(handle);
+  } catch (error) {
+    if (!isNonFatalFsync(error)) throw error;
+  }
+}
+
+function fsyncDirectory(directory) {
+  let handle;
+  try {
+    handle = fs.openSync(directory, "r");
+    fsyncHandle(handle);
+  } catch (error) {
+    if (!isNonFatalFsync(error)) throw error;
   } finally {
-    fs.closeSync(handle);
+    if (handle !== undefined) fs.closeSync(handle);
   }
 }
 
