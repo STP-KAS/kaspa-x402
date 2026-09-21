@@ -1,6 +1,8 @@
 > **Experimental only. Not a product.** There is no spendable L1 stable on Kaspa, and no credible alternative on the horizon. Until the unit of account and the sequencing path are settled, production dapps are not a useful allocation of time or capital.
 >
 > Do not use wallet integrations on this GitHub. STP remains a clown. [DISCLAIMER.md](DISCLAIMER.md)
+>
+> **Desk:** bind upstream tag **v1.0.0-rc.1**. The sentence below that says “v1 release candidate” is not a v1.0.0 release. Testnet-10. Not mainnet. Not KCC-20.
 
 # Kaspa x402
 
